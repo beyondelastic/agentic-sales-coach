@@ -1,0 +1,105 @@
+{
+  "version": "1.0",
+  "description": "Custom coaching rules for sales presentation analysis",
+  "rules": {
+    "politeness": {
+      "weight": 0.2,
+      "required_phrases": [
+        "please",
+        "thank you",
+        "appreciate",
+        "valued",
+        "respect"
+      ],
+      "forbidden_phrases": [
+        "obviously",
+        "clearly you should",
+        "just do this",
+        "it's simple",
+        "you need to"
+      ],
+      "description": "Evaluate professional and respectful communication"
+    },
+    "company_wording": {
+      "weight": 0.25,
+      "preferred_terms": {
+        "client": ["valued partner", "customer", "client"],
+        "cheap": ["cost-effective", "competitive pricing", "value-driven"],
+        "buy": ["invest in", "partner with", "choose"],
+        "sell": ["offer", "provide", "deliver"],
+        "deal": ["partnership", "agreement", "solution"]
+      },
+      "description": "Enforce company-specific terminology and branding"
+    },
+    "sales_structure": {
+      "weight": 0.3,
+      "required_elements": [
+        {
+          "name": "introduction",
+          "description": "Personal introduction and agenda setting",
+          "keywords": ["my name", "today we'll", "agenda", "overview"]
+        },
+        {
+          "name": "problem_identification",
+          "description": "Identify customer pain points",
+          "keywords": ["challenge", "problem", "difficulty", "pain point", "struggle"]
+        },
+        {
+          "name": "solution_presentation",
+          "description": "Present product/service as solution",
+          "keywords": ["solution", "helps you", "enables", "provides", "solves"]
+        },
+        {
+          "name": "value_proposition",
+          "description": "Clear articulation of benefits and ROI",
+          "keywords": ["benefit", "value", "ROI", "save", "improve", "increase"]
+        },
+        {
+          "name": "call_to_action",
+          "description": "Clear next steps and urgency",
+          "keywords": ["next step", "let's schedule", "move forward", "ready to", "when can we"]
+        }
+      ],
+      "order_matters": true,
+      "description": "Validate presence and sequence of sales presentation elements"
+    },
+    "engagement": {
+      "weight": 0.25,
+      "criteria": {
+        "filler_words": {
+          "max_count_per_minute": 5,
+          "examples": ["um", "uh", "like", "you know", "basically", "actually", "so"],
+          "description": "Minimize filler words for confident delivery"
+        },
+        "questions": {
+          "min_count": 2,
+          "types": ["open-ended", "discovery", "confirming"],
+          "description": "Ask engaging questions to involve the prospect"
+        },
+        "energy": {
+          "indicators": ["enthusiasm", "confidence", "clarity"],
+          "description": "Demonstrate energy and passion for the solution"
+        }
+      },
+      "description": "Evaluate presenter engagement and communication quality"
+    }
+  },
+  "scoring": {
+    "excellent": {
+      "range": [9, 10],
+      "description": "Outstanding performance with minimal areas for improvement"
+    },
+    "good": {
+      "range": [7, 8],
+      "description": "Solid performance with some room for enhancement"
+    },
+    "fair": {
+      "range": [5, 6],
+      "description": "Adequate performance with several improvement areas"
+    },
+    "needs_improvement": {
+      "range": [1, 4],
+      "description": "Significant gaps in presentation effectiveness"
+    }
+  }
+}

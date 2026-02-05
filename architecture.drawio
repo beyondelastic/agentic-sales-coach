@@ -1,0 +1,215 @@
+<mxfile host="app.diagrams.net" modified="2026-02-05T12:00:00.000Z" agent="5.0" version="24.0.0">
+  <diagram name="AI Sales Coach Architecture" id="architecture">
+    <mxGraphModel dx="1434" dy="820" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1200" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        
+        <!-- Title -->
+        <mxCell id="title" value="AI Sales Coach - Interactive Avatar Architecture" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=24;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="400" y="20" width="800" height="40" as="geometry" />
+        </mxCell>
+        
+        <!-- Browser Layer -->
+        <mxCell id="browser-container" value="Browser (Frontend)" style="swimlane;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=14;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="80" y="100" width="700" height="400" as="geometry" />
+        </mxCell>
+        
+        <!-- UI Component -->
+        <mxCell id="ui" value="UI (index.html)&#xa;&#xa;• Avatar Video Display&#xa;• Control Buttons&#xa;• Transcript Bubbles&#xa;• Coaching Report" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;align=left;verticalAlign=top;spacingLeft=10;spacingTop=5;" vertex="1" parent="browser-container">
+          <mxGeometry x="30" y="40" width="200" height="120" as="geometry" />
+        </mxCell>
+        
+        <!-- Web Speech API -->
+        <mxCell id="webspeech" value="Web Speech API&#xa;&#xa;• Continuous Recognition&#xa;• Real-time STT&#xa;• Pause Detection (4s)&#xa;• Microphone Control" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;align=left;verticalAlign=top;spacingLeft=10;spacingTop=5;" vertex="1" parent="browser-container">
+          <mxGeometry x="30" y="180" width="200" height="120" as="geometry" />
+        </mxCell>
+        
+        <!-- JavaScript App -->
+        <mxCell id="jsapp" value="JavaScript App&#xa;(app_with_avatar.js)&#xa;&#xa;• WebSocket Client&#xa;• Conversation Manager&#xa;• Avatar Controller&#xa;• State Management" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;align=left;verticalAlign=top;spacingLeft=10;spacingTop=5;" vertex="1" parent="browser-container">
+          <mxGeometry x="270" y="40" width="200" height="130" as="geometry" />
+        </mxCell>
+        
+        <!-- Azure Speech SDK -->
+        <mxCell id="speechsdk" value="Azure Speech SDK&#xa;&#xa;• Avatar Synthesizer&#xa;• WebRTC Connection&#xa;• TTS with Lip-sync&#xa;• ICE Server Auth" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;align=left;verticalAlign=top;spacingLeft=10;spacingTop=5;" vertex="1" parent="browser-container">
+          <mxGeometry x="270" y="190" width="200" height="120" as="geometry" />
+        </mxCell>
+        
+        <!-- WebRTC Video -->
+        <mxCell id="webrtc" value="WebRTC Video Stream&#xa;&#xa;• Peer Connection&#xa;• Avatar Video (1920x1080)&#xa;• Audio Track&#xa;• 25 FPS Real-time" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;align=left;verticalAlign=top;spacingLeft=10;spacingTop=5;" vertex="1" parent="browser-container">
+          <mxGeometry x="500" y="40" width="170" height="120" as="geometry" />
+        </mxCell>
+        
+        <!-- WebSocket Connection -->
+        <mxCell id="ws-connection" value="WebSocket /ws/interactive&#xa;&#xa;• Bidirectional&#xa;• Real-time Messages&#xa;• JSON Protocol" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#b1ddf0;strokeColor=#10739e;align=left;verticalAlign=top;spacingLeft=10;spacingTop=5;" vertex="1" parent="browser-container">
+          <mxGeometry x="500" y="190" width="170" height="120" as="geometry" />
+        </mxCell>
+        
+        <!-- Backend Layer -->
+        <mxCell id="backend-container" value="Backend (FastAPI)" style="swimlane;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=14;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="80" y="560" width="700" height="320" as="geometry" />
+        </mxCell>
+        
+        <!-- FastAPI Main -->
+        <mxCell id="fastapi" value="main.py (FastAPI)&#xa;&#xa;• REST Endpoints&#xa;• WebSocket Handler&#xa;• Session Management&#xa;• Conversation History" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;align=left;verticalAlign=top;spacingLeft=10;spacingTop=5;" vertex="1" parent="backend-container">
+          <mxGeometry x="30" y="40" width="200" height="120" as="geometry" />
+        </mxCell>
+        
+        <!-- Sales Coach Agent -->
+        <mxCell id="agent" value="SalesCoachAgent&#xa;&#xa;• analyze_presentation()&#xa;• generate_natural_response()&#xa;• Question Detection&#xa;• GPT-4o Integration" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;align=left;verticalAlign=top;spacingLeft=10;spacingTop=5;" vertex="1" parent="backend-container">
+          <mxGeometry x="270" y="40" width="200" height="120" as="geometry" />
+        </mxCell>
+        
+        <!-- Speech Service -->
+        <mxCell id="speech-service" value="SpeechService&#xa;&#xa;• STT Configuration&#xa;• Region: eastus&#xa;• Continuous Recognition" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;align=left;verticalAlign=top;spacingLeft=10;spacingTop=5;" vertex="1" parent="backend-container">
+          <mxGeometry x="30" y="180" width="200" height="100" as="geometry" />
+        </mxCell>
+        
+        <!-- Avatar Service -->
+        <mxCell id="avatar-service" value="AvatarService&#xa;&#xa;• Avatar Config (lisa)&#xa;• ICE Token Generation&#xa;• Voice: JennyMultilingual&#xa;• Style: casual-sitting" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;align=left;verticalAlign=top;spacingLeft=10;spacingTop=5;" vertex="1" parent="backend-container">
+          <mxGeometry x="270" y="180" width="200" height="100" as="geometry" />
+        </mxCell>
+        
+        <!-- Config -->
+        <mxCell id="config" value="Configuration&#xa;&#xa;• Environment Variables&#xa;• Sales Rules (JSON)&#xa;• Azure Credentials" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#b1ddf0;strokeColor=#10739e;align=left;verticalAlign=top;spacingLeft=10;spacingTop=5;" vertex="1" parent="backend-container">
+          <mxGeometry x="500" y="40" width="170" height="100" as="geometry" />
+        </mxCell>
+        
+        <!-- Azure Services Layer -->
+        <mxCell id="azure-container" value="Azure Services" style="swimlane;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=14;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="880" y="100" width="640" height="780" as="geometry" />
+        </mxCell>
+        
+        <!-- Azure AI Foundry -->
+        <mxCell id="ai-foundry" value="Azure AI Foundry&#xa;&#xa;• GPT-4o Deployment&#xa;• Model: gpt-4o&#xa;• API Version: 2024-10-21&#xa;• Temperature: 0.7-0.8&#xa;&#xa;Capabilities:&#xa;• Sales Analysis (6 dimensions)&#xa;• Natural Response Generation&#xa;• Question Detection&#xa;• Custom Rule Validation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;align=left;verticalAlign=top;spacingLeft=10;spacingTop=5;fontStyle=1" vertex="1" parent="azure-container">
+          <mxGeometry x="40" y="40" width="260" height="220" as="geometry" />
+        </mxCell>
+        
+        <!-- Azure Speech Service -->
+        <mxCell id="speech-azure" value="Azure Speech Service&#xa;(eastus, S0 tier)&#xa;&#xa;• Speech-to-Text (STT)&#xa;• Text-to-Speech (TTS)&#xa;• Avatar Synthesis&#xa;• ICE Server (TURN Relay)&#xa;&#xa;Avatar Features:&#xa;• Character: lisa&#xa;• Video: 1920x1080, 25 FPS&#xa;• Voice: en-US-JennyMultilingual&#xa;• Lip-sync + Gestures" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;align=left;verticalAlign=top;spacingLeft=10;spacingTop=5;fontStyle=1" vertex="1" parent="azure-container">
+          <mxGeometry x="330" y="40" width="270" height="220" as="geometry" />
+        </mxCell>
+        
+        <!-- WebRTC Flow -->
+        <mxCell id="webrtc-flow" value="WebRTC Avatar Stream&#xa;&#xa;1. ICE Token Request&#xa;2. Peer Connection Setup&#xa;3. Avatar Video Stream&#xa;4. Audio Stream&#xa;5. Real-time Synthesis" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;align=left;verticalAlign=top;spacingLeft=10;spacingTop=5;" vertex="1" parent="azure-container">
+          <mxGeometry x="40" y="290" width="260" height="140" as="geometry" />
+        </mxCell>
+        
+        <!-- Message Flow -->
+        <mxCell id="message-flow" value="WebSocket Message Types&#xa;&#xa;Client → Server:&#xa;• start_session&#xa;• transcript_update&#xa;• pause_detected&#xa;• end_presentation&#xa;&#xa;Server → Client:&#xa;• avatar_speak&#xa;• coaching_report" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#b1ddf0;strokeColor=#10739e;align=left;verticalAlign=top;spacingLeft=10;spacingTop=5;" vertex="1" parent="azure-container">
+          <mxGeometry x="330" y="290" width="270" height="200" as="geometry" />
+        </mxCell>
+        
+        <!-- Conversation Flow -->
+        <mxCell id="conv-flow" value="Interactive Conversation Flow&#xa;&#xa;1. Avatar greets user&#xa;2. User presents (STT → transcript)&#xa;3. Pause detected (4 seconds)&#xa;4. GPT-4o analyzes context&#xa;5. Avatar responds naturally&#xa;6. Repeat steps 2-5&#xa;7. User stops → Final analysis&#xa;8. Avatar delivers coaching report" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;align=left;verticalAlign=top;spacingLeft=10;spacingTop=5;fontStyle=1" vertex="1" parent="azure-container">
+          <mxGeometry x="40" y="460" width="560" height="180" as="geometry" />
+        </mxCell>
+        
+        <!-- Data Flow Diagram -->
+        <mxCell id="dataflow-title" value="Data Flow" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=16;fontStyle=1" vertex="1" parent="azure-container">
+          <mxGeometry x="40" y="660" width="560" height="30" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="dataflow" value="User Speech → Web Speech API → transcript_update → FastAPI → GPT-4o → Response Decision → avatar_speak → Azure Speech → Avatar Video/Audio → User" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;align=center;" vertex="1" parent="azure-container">
+          <mxGeometry x="40" y="700" width="560" height="60" as="geometry" />
+        </mxCell>
+        
+        <!-- Connections from Browser to Backend -->
+        <mxCell id="edge1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeWidth=3;strokeColor=#0066CC;" edge="1" parent="1" source="ws-connection" target="fastapi">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge1-label" value="WebSocket&#xa;Messages" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=12;fontStyle=1" vertex="1" connectable="0" parent="edge1">
+          <mxGeometry x="-0.1" y="2" relative="1" as="geometry">
+            <mxPoint as="offset" x="50" y="-5" />
+          </mxGeometry>
+        </mxCell>
+        
+        <!-- Connection from Backend to Azure AI -->
+        <mxCell id="edge2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.25;exitDx=0;exitDy=0;entryX=0;entryY=0.25;entryDx=0;entryDy=0;strokeWidth=3;strokeColor=#FF6600;" edge="1" parent="1" source="agent" target="ai-foundry">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge2-label" value="GPT-4o API&#xa;Calls" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=12;fontStyle=1" vertex="1" connectable="0" parent="edge2">
+          <mxGeometry x="-0.1" y="2" relative="1" as="geometry">
+            <mxPoint as="offset" y="-15" />
+          </mxGeometry>
+        </mxCell>
+        
+        <!-- Connection from Backend to Speech Service -->
+        <mxCell id="edge3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeWidth=3;strokeColor=#CC0000;" edge="1" parent="1" source="avatar-service" target="speech-azure">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge3-label" value="Avatar Config&#xa;&amp; ICE Tokens" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=12;fontStyle=1" vertex="1" connectable="0" parent="edge3">
+          <mxGeometry x="-0.1" y="2" relative="1" as="geometry">
+            <mxPoint as="offset" y="-15" />
+          </mxGeometry>
+        </mxCell>
+        
+        <!-- Connection from Speech SDK to Azure Speech -->
+        <mxCell id="edge4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.75;entryDx=0;entryDy=0;strokeWidth=3;strokeColor=#9900CC;dashed=1;" edge="1" parent="1" source="speechsdk" target="speech-azure">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge4-label" value="WebRTC&#xa;Connection" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=12;fontStyle=1" vertex="1" connectable="0" parent="edge4">
+          <mxGeometry x="-0.1" y="2" relative="1" as="geometry">
+            <mxPoint as="offset" x="30" y="-15" />
+          </mxGeometry>
+        </mxCell>
+        
+        <!-- Internal Browser Connections -->
+        <mxCell id="edge5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeWidth=2;strokeColor=#666666;" edge="1" parent="1" source="ui" target="webspeech">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="edge6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeWidth=2;strokeColor=#666666;" edge="1" parent="1" source="ui" target="jsapp">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="edge7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeWidth=2;strokeColor=#666666;" edge="1" parent="1" source="jsapp" target="ws-connection">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="edge8" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeWidth=2;strokeColor=#666666;" edge="1" parent="1" source="jsapp" target="speechsdk">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="edge9" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;strokeWidth=2;strokeColor=#666666;" edge="1" parent="1" source="speechsdk" target="webrtc">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        
+        <!-- Internal Backend Connections -->
+        <mxCell id="edge10" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeWidth=2;strokeColor=#666666;" edge="1" parent="1" source="fastapi" target="agent">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="edge11" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeWidth=2;strokeColor=#666666;" edge="1" parent="1" source="fastapi" target="speech-service">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="edge12" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeWidth=2;strokeColor=#666666;" edge="1" parent="1" source="agent" target="avatar-service">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        
+        <!-- Legend -->
+        <mxCell id="legend" value="Legend" style="swimlane;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=12;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="80" y="930" width="700" height="120" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="legend1" value="WebSocket (Bidirectional)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#0066CC;strokeColor=#0066CC;fontColor=#FFFFFF;fontStyle=1" vertex="1" parent="legend">
+          <mxGeometry x="20" y="40" width="150" height="30" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="legend2" value="REST API Calls" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FF6600;strokeColor=#FF6600;fontColor=#FFFFFF;fontStyle=1" vertex="1" parent="legend">
+          <mxGeometry x="190" y="40" width="150" height="30" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="legend3" value="Azure Services" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#CC0000;strokeColor=#CC0000;fontColor=#FFFFFF;fontStyle=1" vertex="1" parent="legend">
+          <mxGeometry x="360" y="40" width="150" height="30" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="legend4" value="WebRTC Stream (Dashed)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#9900CC;strokeColor=#9900CC;fontColor=#FFFFFF;fontStyle=1" vertex="1" parent="legend">
+          <mxGeometry x="530" y="40" width="150" height="30" as="geometry" />
+        </mxCell>
+        
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

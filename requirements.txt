@@ -1,0 +1,30 @@
+# Azure AI Foundry SDK
+azure-ai-projects==1.0.0
+azure-identity
+
+# OpenAI SDK
+openai>=1.12.0
+
+# Azure Speech Services
+azure-cognitiveservices-speech>=1.35.0
+
+# Azure Storage (for optional transcript storage)
+azure-storage-blob
+
+# Web Framework
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+python-socketio==5.11.0
+aiohttp==3.9.0
+python-multipart
+
+# Data Validation
+pydantic==2.5.0
+pydantic-settings
+
+# Observability
+azure-monitor-opentelemetry
+opentelemetry-instrumentation-fastapi
+
+# Utilities
+python-dotenv==1.0.0
