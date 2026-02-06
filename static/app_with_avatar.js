@@ -25,6 +25,8 @@ let hasRespondedToCurrentText = false;
 let avatarIsSpeaking = false;  // Track when avatar is talking
 let shouldRestartRecognition = true;  // Control auto-restart of recognition
 let currentUtterance = "";  // Track current speaking segment
+let recentAvatarSpeech = [];  // Track recent avatar utterances to filter feedback
+let avatarSpeechEndTime = 0;  // Track when avatar finished speaking
 
 // Speech Recognition setup
 let recognition = null;
@@ -39,14 +41,22 @@ if (recognition) {
     recognition.interimResults = true;
     recognition.lang = 'en-US';
     
+    // Try to enable echo cancellation (browser-dependent)
+    try {
+        recognition.maxAlternatives = 1;
+    } catch (e) {
+        console.log('Could not set maxAlternatives:', e);
+    }
+    
     recognition.onstart = function() {
         console.log('Speech recognition started');
     };
     
     recognition.onresult = function(event) {
-        // Don't process if avatar is currently speaking
-        if (avatarIsSpeaking) {
-            console.log('🚫 Blocked speech recognition - avatar is speaking');
+        // Don't process if avatar is currently speaking OR just finished recently
+        const timeSinceAvatarSpeech = Date.now() - avatarSpeechEndTime;
+        if (avatarIsSpeaking || timeSinceAvatarSpeech < 3000) {
+            console.log(`🚫 Blocked - avatar speaking: ${avatarIsSpeaking}, time since speech: ${timeSinceAvatarSpeech}ms`);
             return;
         }
         
@@ -63,6 +73,18 @@ if (recognition) {
         }
         
         if (finalTranscript) {
+            // Check if this matches recent avatar speech (feedback detection)
+            const cleanTranscript = finalTranscript.trim().toLowerCase();
+            const isAvatarEcho = recentAvatarSpeech.some(avatarText => {
+                const similarity = stringSimilarity(cleanTranscript, avatarText.toLowerCase());
+                return similarity > 0.7;  // 70% similarity = likely echo
+            });
+            
+            if (isAvatarEcho) {
+                console.log('🚫 Filtered out avatar echo:', finalTranscript.substring(0, 50) + '...');
+                return;
+            }
+            
             transcriptAccumulator += finalTranscript;
             currentUtterance += finalTranscript;  // Add to current speaking segment
             lastSpeechTime = Date.now();
@@ -90,12 +112,12 @@ if (recognition) {
                 interactiveWebSocket.readyState === WebSocket.OPEN && 
                 !hasRespondedToCurrentText) {
                 
-                // Wait 4 seconds of silence before avatar responds
+                // Wait 6 seconds of silence before avatar considers responding
                 pauseTimer = setTimeout(() => {
                     const textToRespond = transcriptAccumulator.substring(lastTranscriptSent.length - transcriptAccumulator.length).trim();
                     
-                    // Only send if there's actually new content (more than 5 words)
-                    if (textToRespond.split(' ').length >= 5) {
+                    // Only send if there's substantial content (more than 10 words for better context)
+                    if (textToRespond.split(' ').length >= 10) {
                         hasRespondedToCurrentText = true;
                         
                         // Create a new bubble for the completed utterance
@@ -109,7 +131,7 @@ if (recognition) {
                             recent_text: textToRespond
                         }));
                     }
-                }, 4000);  // Increased to 4 seconds
+                }, 6000);  // Increased to 6 seconds - longer pauses mean clearer turn-taking
             }
         }
         
@@ -136,6 +158,45 @@ if (recognition) {
 // ============================================================================
 // AVATAR FUNCTIONS
 // ============================================================================
+
+// Helper function to calculate string similarity (Levenshtein distance based)
+function stringSimilarity(str1, str2) {
+    const longer = str1.length > str2.length ? str1 : str2;
+    const shorter = str1.length > str2.length ? str2 : str1;
+    
+    if (longer.length === 0) return 1.0;
+    
+    const editDistance = levenshteinDistance(longer, shorter);
+    return (longer.length - editDistance) / longer.length;
+}
+
+function levenshteinDistance(str1, str2) {
+    const matrix = [];
+    
+    for (let i = 0; i <= str2.length; i++) {
+        matrix[i] = [i];
+    }
+    
+    for (let j = 0; j <= str1.length; j++) {
+        matrix[0][j] = j;
+    }
+    
+    for (let i = 1; i <= str2.length; i++) {
+        for (let j = 1; j <= str1.length; j++) {
+            if (str2.charAt(i - 1) === str1.charAt(j - 1)) {
+                matrix[i][j] = matrix[i - 1][j - 1];
+            } else {
+                matrix[i][j] = Math.min(
+                    matrix[i - 1][j - 1] + 1,
+                    matrix[i][j - 1] + 1,
+                    matrix[i - 1][j] + 1
+                );
+            }
+        }
+    }
+    
+    return matrix[str2.length][str1.length];
+}
 
 async function connectAvatar() {
     console.log('Connecting to avatar...');
@@ -350,6 +411,13 @@ function setupInteractiveWebSocket() {
             avatarIsSpeaking = true;
             console.log('Avatar about to speak - blocking mic input');
             
+            // Track avatar speech for echo detection
+            recentAvatarSpeech.push(message.text);
+            // Keep only last 3 avatar utterances
+            if (recentAvatarSpeech.length > 3) {
+                recentAvatarSpeech.shift();
+            }
+            
             // Remove any live preview bubble before avatar speaks
             const livePreview = document.getElementById('transcriptBox').querySelector('[data-speaker="user-live"]');
             if (livePreview) {
@@ -435,19 +503,24 @@ function speakToAvatar(text) {
     
     avatarSynthesizer.speakTextAsync(text).then((result) => {
         if (result.reason === SpeechSDK.ResultReason.SynthesizingAudioCompleted) {
-            console.log("Avatar speech completed");
-            // Add delay before clearing flag and restarting recognition
+            console.log("Avatar speech completed - waiting for audio playback to finish");
+            // INCREASED BUFFER: Wait longer for audio to fully finish playing
+            // The synthesizer completes before audio finishes playing through speakers
             setTimeout(() => {
                 avatarIsSpeaking = false;
+                avatarSpeechEndTime = Date.now();  // Track when avatar finished
                 updateAvatarStatus('👂 Listening...');
-                console.log('Avatar done speaking - restarting mic');
+                console.log('Avatar audio playback complete - restarting mic in 1 second');
                 
-                // Restart speech recognition
-                shouldRestartRecognition = true;  // Re-enable auto-restart
-                if (isRecording && recognition) {
-                    recognition.start();
-                }
-            }, 1000);  // 1 second buffer to ensure audio is completely done
+                // Add another delay before actually restarting to ensure audio is fully done
+                setTimeout(() => {
+                    shouldRestartRecognition = true;  // Re-enable auto-restart
+                    if (isRecording && recognition) {
+                        console.log('✅ Restarting speech recognition');
+                        recognition.start();
+                    }
+                }, 1000);  // Additional 1 second buffer
+            }, 3000);  // Increased to 3 seconds for audio playback completion
         } else {
             console.error("Avatar speech failed:", result.errorDetails);
             avatarIsSpeaking = false;

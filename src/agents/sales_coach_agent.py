@@ -331,17 +331,19 @@ Salesperson: "{presenter_text}"
 
 HOW TO RESPOND:
 
-If they asked a DIRECT QUESTION (clear question mark or asking for your input):
+If they asked a DIRECT QUESTION (ends with ? and clearly directed at you):
 - Answer naturally in 10-25 words
 
-If they made a STATEMENT:
-- Usually stay SILENT to let them continue presenting
-- Only respond if:
-  * They've been talking for a while and you're genuinely curious
-  * You need clarification on something important
-  * It's clearly your turn to speak
+If they made a STATEMENT or are still presenting:
+- STAY SILENT - let them finish their pitch
+- Salespeople need time to explain their product
+- Only respond if ALL of these are true:
+  * They've clearly finished a major point (not just pausing mid-thought)
+  * You have a critical clarification question
+  * It feels natural for a customer to interject
 
-Be a good listener - customers don't interrupt constantly.
+Be a PATIENT listener - real customers don't interrupt every 10 seconds.
+Most pauses are just the salesperson gathering their thoughts.
 
 Response (or "SILENT" to stay quiet):"""
             
