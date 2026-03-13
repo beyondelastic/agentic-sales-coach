@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI Sales Coach - Real-time Presentation Analysis</title>
     
-    <!-- Azure Speech SDK for Avatar -->
-    <script src="https://aka.ms/csspeech/jsbrowserpackageraw"></script>
+    <!-- Voice Live uses native browser WebSocket, AudioWorklet, and WebRTC.
+         No Azure Speech SDK required for the interactive session. -->
     
     <style>
         * {
@@ -139,6 +139,37 @@
         @keyframes pulse {
             0%, 100% { opacity: 1; }
             50% { opacity: 0.6; }
+        }
+        
+        .processing-indicator {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+            text-align: center;
+            display: none;
+            animation: pulse 2s infinite;
+        }
+        
+        .processing-indicator.visible {
+            display: block;
+        }
+        
+        .processing-indicator .spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 3px solid rgba(255,255,255,0.3);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 10px;
+            vertical-align: middle;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
         }
         
         .transcript-box {
@@ -288,6 +319,46 @@
             font-size: 0.9rem;
         }
         
+        .camera-notice {
+            background: #fff5f5;
+            border: 2px solid #fc8181;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .camera-notice.recording {
+            background: #f0fff4;
+            border-color: #48bb78;
+        }
+        
+        .camera-icon {
+            font-size: 24px;
+            flex-shrink: 0;
+        }
+        
+        .camera-notice-text {
+            flex: 1;
+        }
+        
+        .camera-notice-text strong {
+            display: block;
+            margin-bottom: 4px;
+            color: #742a2a;
+        }
+        
+        .camera-notice.recording .camera-notice-text strong {
+            color: #22543d;
+        }
+        
+        .camera-notice-text small {
+            color: #744210;
+            font-size: 0.9rem;
+        }
+        
         .loading {
             text-align: center;
             padding: 40px;
@@ -372,9 +443,18 @@
                     <span id="statusBadge" class="status-badge status-idle">Ready</span>
                 </h2>
                 
+                <!-- Camera Recording Notice -->
+                <div id="cameraNotice" class="camera-notice">
+                    <div class="camera-icon">📹</div>
+                    <div class="camera-notice-text">
+                        <strong>⚠️ Camera & Emotion Analysis Active</strong>
+                        <small>Your webcam will activate when you start recording to capture facial expressions for emotion analysis. All video is processed securely and automatically deleted after analysis for your privacy.</small>
+                    </div>
+                </div>
+                
                 <div class="controls">
                     <button id="startBtn" class="btn-primary" onclick="startRecording()">
-                        ▶️ Start Recording
+                        📹 Start Presentation (with Camera)
                     </button>
                     <button id="stopBtn" class="btn-danger" onclick="stopRecording()" disabled>
                         ⏹️ Stop & Analyze
@@ -390,6 +470,12 @@
                 <div id="transcriptBox" class="transcript-box empty">
                     Your presentation transcript will appear here as you speak...
                 </div>
+            </div>
+            
+            <!-- Video Processing Indicator -->
+            <div id="processingIndicator" class="processing-indicator">
+                <div class="spinner"></div>
+                <span id="processingText">Analyzing presentation...</span>
             </div>
             
             <!-- Report Section -->
@@ -419,6 +505,21 @@
                 </div>
                 
                 <div class="report-section">
+                    <div id="emotionalToneSection" style="display:none;">
+                        <h3>🎭 Emotional Tone</h3>
+                        <div id="emotionalToneSummary" class="list-item" style="margin-bottom:10px;"></div>
+                        <div id="emotionalKeyMoments"></div>
+                        <div id="emotionalAuthenticity" class="list-item" style="margin-top:8px;font-style:italic;opacity:0.85;"></div>
+                    </div>
+                </div>
+
+                <div class="report-section" id="visualAnalysisSection" style="display:none;">
+                    <h3>📷 Visual Presence</h3>
+                    <div id="visualAnalysisRows"></div>
+                    <div id="visualOverallNote" class="list-item" style="margin-top:8px;font-style:italic;opacity:0.85;"></div>
+                </div>
+
+                <div class="report-section">
                     <h3>💡 Summary</h3>
                     <div id="summaryText" class="list-item"></div>
                 </div>
@@ -431,6 +532,6 @@
         </div>
     </div>
     
-    <script src="/static/app_with_avatar.js"></script>
+    <script src="/static/app_with_avatar.js?v=3.21"></script>
 </body>
 </html>

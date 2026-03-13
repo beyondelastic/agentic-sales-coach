@@ -17,18 +17,50 @@ class Settings(BaseSettings):
     foundry_endpoint: str
     foundry_project_name: str
     
-    # Azure Speech Service
-    speech_key: str
-    speech_region: str
+    # Azure Speech Service (unused — kept for backwards compat, not required)
+    speech_key: str = ""
+    speech_region: str = ""
+    
+    # Azure AI Language (for emotion analysis)
+    language_endpoint: str = ""
+    language_key: str = ""
+    
+    # Azure AI Video Indexer (for facial emotion analysis)
+    video_indexer_account_id: str = ""
+    video_indexer_location: str = "trial"  # "trial" or Azure region like "eastus"
+    video_indexer_resource_id: str = ""  # ARM resource ID for production
+    video_indexer_api_key: str = ""  # For trial accounts
     
     # Model Configuration
-    gpt_model_name: str = "gpt-4o"
+    gpt_model_name: str = "gpt-4.1"
     gpt_api_version: str = "2024-10-21"
     
     # Application Settings
     environment: str = "development"
     log_level: str = "INFO"
     
+    # Voice Live API (Speech-to-Speech)
+    # voice_live_endpoint: Foundry resource base URL, e.g. https://myresource.services.ai.azure.com
+    # Falls back to foundry_endpoint if not set. Can also be a cognitiveservices.azure.com URL.
+    voice_live_endpoint: str = ""
+    # voice_live_key: API key for the Foundry / Speech-in-Foundry resource.
+    # Leave empty to disable Voice Live interactive mode.
+    voice_live_key: str = ""
+    # Model: gpt-4.1 recommended — uses Azure STT+TTS for best transcription quality and HD voices.
+    # Alternatives: gpt-realtime (native audio, lower latency), gpt-4o, gpt-4.1-mini
+    voice_live_model: str = "gpt-4.1"
+    # Azure TTS voice for the avatar — HD voice requires region support (eastus, westus2, westeurope, etc.)
+    voice_live_voice_name: str = "en-US-Ava:DragonHDLatestNeural"
+    # Avatar character and style
+    voice_live_avatar_character: str = "lisa"
+    voice_live_avatar_style: str = "casual-sitting"
+
+    # Visual analysis — webcam frame sampling during recording
+    # FRAME_CAPTURE_INTERVAL_SECONDS: how often a snapshot is taken (default: 30s)
+    # FRAME_CAPTURE_MAX_COUNT: max frames sent to GPT vision; evenly sampled across the session (default: 20)
+    frame_capture_interval_seconds: int = 30
+    frame_capture_max_count: int = 20
+
     # Optional: Application Insights
     applicationinsights_connection_string: str = ""
     
@@ -78,6 +110,16 @@ class AppConfig:
         """Get OpenAI client configured for Azure AI Foundry."""
         return self.project_client.get_openai_client(
             api_version=self.settings.gpt_api_version
+        )
+
+    def get_voice_live_ws_url(self) -> str:
+        """Build the Voice Live WebSocket URL from the configured endpoint."""
+        base = (self.settings.voice_live_endpoint or self.settings.foundry_endpoint).rstrip("/")
+        ws_base = base.replace("https://", "wss://")
+        return (
+            f"{ws_base}/voice-live/realtime"
+            f"?api-version=2025-10-01"
+            f"&model={self.settings.voice_live_model}"
         )
     
     def get_rules_prompt_section(self) -> str:

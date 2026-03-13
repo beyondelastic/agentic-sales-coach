@@ -5,6 +5,15 @@ from pydantic import BaseModel, Field
 from typing import List, Dict, Optional
 
 
+class EmotionalTone(BaseModel):
+    """Presenter emotional tone derived from speech and language patterns."""
+    overall_sentiment: str = Field(..., description="positive, neutral, negative, or mixed")
+    confidence_level: str = Field(..., description="high, moderate, or low")
+    energy_level: str = Field(..., description="high, moderate, or low")
+    key_moments: List[str] = Field(default_factory=list, description="Notable emotional moments or tone shifts")
+    authenticity_note: str = Field(default="", description="Observation about presenter authenticity")
+
+
 class ImprovementItem(BaseModel):
     """Represents a specific area for improvement."""
     area: str = Field(..., description="Category of improvement (e.g., 'Filler Words', 'Value Proposition')")
@@ -34,6 +43,16 @@ class CriteriaScores(BaseModel):
     rule_compliance: float = Field(..., ge=1, le=10, description="Adherence to custom rules")
 
 
+class VisualAnalysis(BaseModel):
+    """Presenter visual analysis derived from webcam frames."""
+    expressions: str = Field(..., description="Predominant facial expressions observed (e.g. confident smile, brief uncertainty)")
+    eye_contact: str = Field(..., description="Eye contact quality and consistency with the camera")
+    posture_and_gestures: str = Field(..., description="Posture and any visible hand/body gestures")
+    professional_appearance: str = Field(..., description="Attire, background, lighting — overall professional presentation")
+    confidence_arc: str = Field(..., description="How visual confidence changed from start to end of session")
+    overall_note: str = Field(..., description="One-sentence visual summary of the presenter")
+
+
 class SalesCoachingReport(BaseModel):
     """Comprehensive sales coaching analysis report."""
     overall_score: float = Field(..., ge=1, le=10, description="Overall presentation effectiveness score")
@@ -42,6 +61,8 @@ class SalesCoachingReport(BaseModel):
     strengths: List[str] = Field(..., description="List of things done well in the presentation")
     improvements: List[ImprovementItem] = Field(..., description="Specific areas for improvement with recommendations")
     rule_violations: List[RuleViolation] = Field(default_factory=list, description="Custom rule violations detected")
+    emotional_tone: Optional[EmotionalTone] = Field(None, description="Emotional tone analysis from speech patterns")
+    visual_analysis: Optional[VisualAnalysis] = Field(None, description="Visual analysis from webcam frames (facial expressions, body language)")
     summary: str = Field(..., description="2-3 sentence overall assessment")
     next_steps: List[str] = Field(..., description="Actionable next steps for improvement")
     
@@ -106,3 +127,4 @@ class PresentationSession(BaseModel):
     duration_seconds: float = Field(..., description="Total presentation duration")
     segments: List[TranscriptSegment] = Field(default_factory=list, description="Individual transcript segments")
     report: Optional[SalesCoachingReport] = Field(None, description="Generated coaching report")
+    has_facial_emotions: bool = Field(default=False, description="Flag indicating facial emotion analysis complete")
