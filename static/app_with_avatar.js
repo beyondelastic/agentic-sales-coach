@@ -96,9 +96,15 @@ async function connectAvatar() {
 
         await new Promise((resolve, reject) => {
             const t = setTimeout(() => reject(new Error("Connection timeout (15 s)")), 15000);
-            voiceLiveWs.onopen = () => { clearTimeout(t); resolve(); };
-            // Override onclose inside the promise so a fast rejection (e.g. 401/404) rejects
+            // Capture the original onclose so we can restore it after a successful open.
             const origClose = voiceLiveWs.onclose;
+            voiceLiveWs.onopen = () => {
+                clearTimeout(t);
+                // Restore the original close handler so normal close handling runs.
+                voiceLiveWs.onclose = origClose;
+                resolve();
+            };
+            // Override onclose inside the promise so a fast rejection (e.g. 401/404) rejects
             voiceLiveWs.onclose = (evt) => {
                 clearTimeout(t);
                 voiceLiveWs.onclose = origClose;
