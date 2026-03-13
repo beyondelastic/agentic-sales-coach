@@ -597,12 +597,19 @@ async function stopRecording() {
     updateAvatarStatus("Analyzing presentation...");
     document.getElementById("stopBtn").disabled = true;
 
+    const processingIndicator = document.getElementById("processingIndicator");
+    if (processingIndicator) {
+        processingIndicator.classList.add("visible");
+        processingIndicator.textContent = "Analyzing presentation...";
+    }
+
     const duration = (Date.now() - startTime) / 1000;
 
     if (!userTranscriptText.trim()) {
         showError("No speech detected. Please try again and speak into your microphone.");
         resetUI();
         updateAvatarStatus("Ready");
+        if (processingIndicator) processingIndicator.classList.remove("visible");
         return;
     }
 
@@ -644,6 +651,8 @@ async function stopRecording() {
         showError("Failed to analyze presentation: " + error.message);
         resetUI();
         updateAvatarStatus("Error during analysis");
+        const indicator = document.getElementById("processingIndicator");
+        if (indicator) indicator.classList.remove("visible");
     }
 }
 
