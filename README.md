@@ -1,136 +1,161 @@
-# 🎯 AI Sales Coach - Interactive Avatar Edition
+# AI Sales Coach
 
-Real-time AI-powered sales coaching application with an interactive avatar that acts as your customer during presentations. Built with Azure AI Foundry, Azure Speech Service, and GPT-4o.
+Real-time AI-powered sales coaching with a live avatar that role-plays as your customer. Powered by Azure AI Foundry Voice Live (speech-to-speech) and GPT-4.1.
 
-## ✨ Features
-
-### 🎭 Interactive AI Avatar
-- **Real-time conversation**: Avatar acts as a customer, asking questions and responding naturally
-- **WebRTC video streaming**: Low-latency, high-quality avatar display (1920x1080, 25 FPS)
-- **Natural interactions**: Detects pauses, responds to questions, engages in dialogue
-- **Speech synthesis**: Avatar speaks with natural voice and lip-sync
-
-### 🎤 Speech Recognition
-- **Real-time transcription**: Continuous speech-to-text during presentations
-- **Conversation bubbles**: Separate message bubbles for you and the avatar
-- **Smart pause detection**: Avatar responds after natural pauses (4 seconds)
-- **Feedback prevention**: Microphone stops during avatar speech
-
-### 🤖 AI-Powered Analysis
-- **GPT-4o evaluation**: Analyzes sales techniques and presentation skills
-- **Custom rule validation**: Checks politeness, company wording, sales structure
-- **6-dimension scoring**: Value proposition, objection handling, active listening, questions, CTA, engagement
-- **Actionable feedback**: Specific recommendations for improvement
-
-## 🏗️ Architecture
+## Architecture
 
 ```
-┌─────────────────┐
-│   Frontend      │
-│  (HTML/JS)      │
-│  - Web Speech   │
-│  - Azure SDK    │
-│  - WebRTC       │
-└────────┬────────┘
-         │
-    WebSocket
-         │
-┌────────▼────────┐
-│   Backend       │
-│  (FastAPI)      │
-│  - Speech STT   │
-│  - GPT-4o       │
-│  - Avatar TTS   │
-└────────┬────────┘
-         │
-    ┌────▼────────────────┐
-    │  Azure Services     │
-    │  - AI Foundry       │
-    │  - Speech Service   │
-    │  - OpenAI (GPT-4o)  │
-    └─────────────────────┘
+Browser
+  │
+  ├─── WebSocket (wss) ──────────────────────► Azure Voice Live
+  │         mic PCM audio + events             (gpt-4.1 + lisa avatar)
+  │
+  │◄── WebRTC ───────────────────────────────── Azure Voice Live
+  │         avatar video + audio stream
+  │
+  └─── REST ─────────────────────────────────► FastAPI Backend
+            /api/voice-live/config               │
+            /api/session/start                   │
+            /api/session/{id}/analyze ───────────► Azure AI Foundry
+            (transcript + webcam frames)           (GPT-4.1 report + vision)
 ```
 
-## 🚀 Quick Start
+The browser connects **directly** to Azure Voice Live via WebSocket for real-time bidirectional speech. The FastAPI backend only provisions config and runs the post-session coaching report (transcript analysis + webcam frame visual analysis).
+
+## Features
+
+- **Live avatar conversation**: `lisa/casual-sitting` avatar powered by Voice Live; responds naturally using server-side VAD
+- **Real-time transcription**: Streaming transcript bubbles for both presenter and avatar turns
+- **Echo cancellation**: Server-side AEC + browser `echoCancellation` prevent feedback loops
+- **Coaching report**: GPT-4.1 analyzes the full transcript across 6 dimensions plus emotional tone
+- **Visual presence analysis**: Webcam frames are captured every 30s during recording; GPT-4.1 vision analyzes facial expressions, eye contact, posture, professional appearance, and confidence arc
+- **Custom rules**: JSON-configurable sales rules validated during analysis
+
+## Quick Start
 
 ### Prerequisites
+
 - Python 3.11+
-- Azure AI Foundry project with GPT-4o deployment
-- Azure Speech Service (eastus, S0 tier for avatar support)
-- Modern web browser with microphone access
+- Azure AI Foundry project with a `gpt-4.1` deployment and Voice Live enabled
+- Modern browser with microphone and webcam access
 
-### Installation
+### Install
 
-1. **Clone the repository**
 ```bash
 git clone <repository-url>
 cd agentic-sales-coach
-```
-
-2. **Set up environment**
-```bash
 python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-3. **Configure Azure credentials**
+### Configure
+
 ```bash
 cp .env.example .env
 # Edit .env with your Azure credentials
 ```
 
 Required environment variables:
-```env
-# Azure AI Foundry
-AZURE_OPENAI_ENDPOINT=https://your-foundry-resource.services.ai.azure.com
-AZURE_OPENAI_KEY=your-key-here
-GPT_MODEL_NAME=gpt-4o
-GPT_API_VERSION=2024-10-21
 
-# Azure Speech Service (must be eastus for avatar)
-SPEECH_REGION=eastus
-SPEECH_KEY=your-speech-key-here
+```env
+# Azure AI Foundry (used for GPT-4.1 report analysis via AIProjectClient)
+FOUNDRY_ENDPOINT=https://<resource>.services.ai.azure.com/api/projects/<project>
+FOUNDRY_PROJECT_NAME=<your-project-name>
+
+# Voice Live (direct browser WebSocket connection)
+VOICE_LIVE_KEY=<your-api-key>
+VOICE_LIVE_ENDPOINT=https://<resource>.services.ai.azure.com
+
+# Model names
+VOICE_LIVE_MODEL=gpt-4.1
+GPT_MODEL_NAME=gpt-4.1
 ```
 
-4. **Run the application**
+Optional overrides (these have sensible defaults):
+
+```env
+VOICE_LIVE_VOICE_NAME=en-US-Ava:DragonHDLatestNeural
+VOICE_LIVE_AVATAR_CHARACTER=lisa
+VOICE_LIVE_AVATAR_STYLE=casual-sitting
+FRAME_CAPTURE_INTERVAL_SECONDS=30   # seconds between webcam snapshots
+FRAME_CAPTURE_MAX_COUNT=20          # max frames sent for visual analysis (evenly sampled)
+GPT_API_VERSION=2024-10-21
+LOG_LEVEL=INFO
+ENVIRONMENT=development
+```
+
+### Run
+
 ```bash
 ./start.sh
+# or: uvicorn src.main:app --reload --port 8000
 ```
 
-5. **Open browser**
+Open `http://localhost:8000`.
+
+## Usage
+
+1. **Connect Avatar** — click "Connect Avatar"; the browser fetches config from `/api/voice-live/config`, starts a session, and opens the Voice Live WebSocket. WebRTC negotiation takes ~5-10 seconds.
+2. **Start Presentation** — click "Start Presentation"; microphone is captured as PCM16 and streamed to Voice Live. The avatar responds naturally when you pause.
+3. **Stop & Get Coaching** — click "Stop & Get Coaching"; the full transcript plus up to 20 evenly-sampled webcam frames are sent to `/api/session/{id}/analyze`. GPT-4.1 analyzes the transcript and a second vision call analyzes the frames. The coaching report appears in the browser.
+
+## Coaching Report
+
+GPT-4.1 evaluates the transcript across:
+
+| Dimension | What it measures |
+|---|---|
+| Value Proposition | Clarity, differentiation, benefit framing |
+| Objection Handling | Confidence and evidence when challenged |
+| Active Listening | Acknowledging and adapting to customer cues |
+| Question Quality | Open-ended discovery questions |
+| Call-to-Action | Clear, specific next steps |
+| Engagement & Delivery | Energy, tone, pacing |
+
+The report also includes:
+- **Emotional Tone**: overall sentiment, confidence level, energy level, key moments, authenticity note
+- **Visual Presence** *(webcam)*: facial expressions, eye contact, posture & gestures, professional appearance, confidence arc — analyzed by GPT-4.1 vision from evenly-sampled webcam frames
+- **Rule Violations**: any breaches of custom rules in `config/rules.json`
+- **Strengths**, **Improvements**, **Next Steps**
+
+## Project Structure
+
 ```
-http://localhost:8000
+agentic-sales-coach/
+├── src/
+│   ├── agents/
+│   │   └── sales_coach_agent.py    # GPT-4.1 report + visual analysis
+│   ├── models/
+│   │   └── report.py               # Pydantic report models (incl. VisualAnalysis)
+│   ├── config.py                   # Settings + Azure clients
+│   └── main.py                     # FastAPI app (6 endpoints)
+├── static/
+│   ├── index.html                  # UI
+│   ├── app_with_avatar.js          # Voice Live WS + WebRTC client
+│   └── pcm-worklet.js              # AudioWorklet PCM capture
+├── config/
+│   └── rules.json                  # Custom coaching rules
+├── .env                            # Credentials (not committed)
+├── requirements.txt
+└── start.sh
 ```
 
-## 📖 Usage Guide
+## API Endpoints
 
-### Step 1: Connect Avatar
-1. Click **"🎭 Connect Avatar"** button
-2. Wait 10-20 seconds for WebRTC connection (connection phases shown in status)
-3. Avatar video appears and status shows "✅ Avatar connected - Ready for interactive presentation"
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/` | Serve `index.html` |
+| `GET` | `/health` | Health check |
+| `GET` | `/api/voice-live/config` | WebSocket URL + avatar config for browser |
+| `POST` | `/api/session/start` | Create a new session |
+| `POST` | `/api/session/{id}/analyze` | Run GPT-4.1 coaching analysis (transcript + visual) |
+| `DELETE` | `/api/session/{id}` | Clean up session |
 
-### Step 2: Start Presentation
-1. Click **"▶️ Start Presentation"** button
-2. Allow microphone access when prompted
-3. Avatar greets you: "Hi! I'm interested in learning about your product. Go ahead."
-4. Deliver your sales presentation
+## Custom Sales Rules
 
-### Step 3: Interactive Conversation
-- **Speak naturally**: Present your product/service
-- **Avatar responds**: Asks questions, requests clarification, shows interest
-- **Answer questions**: Avatar reacts to your responses
-- **Conversation bubbles**: See dialogue in real-time (separate bubbles for you and avatar)
+Edit `config/rules.json`:
 
-### Step 4: End & Get Coaching
-1. Click **"⏹️ Stop & Get Coaching"** button
-2. Wait for GPT-4o analysis (10-15 seconds)
-3. Review detailed coaching report with scores and recommendations
-
-## 🔧 Configuration
-
-### Custom Sales Rules
-Edit `config/sales_rules.json` to customize validation rules:
 ```json
 {
   "rules": [
@@ -145,145 +170,27 @@ Edit `config/sales_rules.json` to customize validation rules:
 }
 ```
 
-### Avatar Settings
-Avatar configuration in `src/services/avatar_service.py`:
-- **Character**: `lisa` (professional female avatar)
-- **Style**: `casual-sitting` (sitting posture)
-- **Voice**: `en-US-JennyMultilingualNeural`
-- **Region**: Must be `eastus` for avatar support
+## Troubleshooting
 
-## 🏭 Azure Resources Setup
+**Avatar video doesn't appear**
+- Check browser console for ICE/WebRTC errors
+- Confirm `VOICE_LIVE_KEY` and `VOICE_LIVE_ENDPOINT` are correct
+- Ensure the Foundry resource has Voice Live and avatar enabled
 
-### 1. Create Azure AI Foundry Project
-```bash
-az login
-az account set --subscription <subscription-id>
+**No audio / avatar is silent**
+- Verify the `gpt-4.1` model deployment exists in your Foundry resource
+- Check that `VOICE_LIVE_MODEL` matches your deployment name
 
-# Create via portal: ai.azure.com
-# 1. Create new project
-# 2. Deploy GPT-4o model
-# 3. Copy endpoint and key
-```
+**Coaching report is empty or truncated**
+- Confirm `GPT_MODEL_NAME` deployment exists and has sufficient quota
+- GPT-5 is NOT supported (reasoning model — exhausts token budget on chain-of-thought); use `gpt-4.1`
+- Minimum transcript length is needed for meaningful analysis
 
-### 2. Create Speech Service (Critical: eastus)
-```bash
-az cognitiveservices account create \
-  --name sales-coach-speech-eastus \
-  --resource-group <your-rg> \
-  --location eastus \
-  --kind SpeechServices \
-  --sku S0
+**Visual Presence section missing from report**
+- Webcam permission must be granted before starting the session
+- Check browser console for `[Visual]` log entries; if 0 frames are logged, check camera access
+- Visual analysis is non-critical — if it fails the transcript report is still returned
 
-az cognitiveservices account keys list \
-  --name sales-coach-speech-eastus \
-  --resource-group <your-rg> \
-  --query "key1" -o tsv
-```
-
-**Important**: Avatar feature requires:
-- Region: `eastus`, `westus2`, `westeurope`, or `southeastasia`
-- Tier: `S0` (Standard)
-
-## 📊 Coaching Report
-
-The AI generates a comprehensive report including:
-
-### Scores (1-10)
-1. **Value Proposition Clarity**: Clear, compelling, differentiated value
-2. **Objection Handling**: Confidence and evidence in addressing concerns
-3. **Active Listening**: Understanding and engaging with customer needs
-4. **Question Quality**: Open-ended, discovery-focused questions
-5. **Call-to-Action**: Clear, specific next steps
-6. **Engagement & Delivery**: Energy, tone, articulation
-
-### Recommendations
-- **Strengths**: What you did well
-- **Areas for Improvement**: Specific gaps identified
-- **Specific Recommendations**: Actionable steps
-- **Next Steps**: How to prepare for the next meeting
-
-## 🛠️ Development
-
-### Project Structure
-```
-agentic-sales-coach/
-├── src/
-│   ├── agents/
-│   │   └── sales_coach_agent.py    # GPT-4o sales coach
-│   ├── services/
-│   │   ├── speech_service.py       # Azure Speech STT
-│   │   └── avatar_service.py       # Avatar configuration
-│   ├── models/
-│   │   └── report.py               # Pydantic models
-│   ├── config.py                   # Configuration loader
-│   └── main.py                     # FastAPI application
-├── static/
-│   ├── index.html                  # UI
-│   └── app_with_avatar.js          # Frontend logic
-├── config/
-│   └── sales_rules.json            # Custom rules
-├── .env                            # Environment variables
-├── requirements.txt                # Python dependencies
-└── start.sh                        # Launch script
-```
-
-### Key Endpoints
-
-**REST API**
-- `GET /` - Serve frontend
-- `GET /api/avatar/config` - Get avatar configuration
-- `POST /api/session/start` - Start new session
-
-**WebSocket**
-- `WS /ws/interactive` - Real-time conversation
-  - `start_session` - Initialize greeting
-  - `transcript_update` - Send speech text
-  - `pause_detected` - Trigger avatar response
-  - `avatar_speak` - Avatar response
-  - `end_presentation` - Get coaching report
-
-## 🐛 Troubleshooting
-
-### Avatar won't connect
-- Verify Speech Service is in `eastus` region
-- Check SKU is `S0` (Standard tier)
-- Confirm Speech Key is correct
-- Check browser console for WebRTC errors
-
-### Avatar hears itself
-- Ensure `shouldRestartRecognition` flag is working
-- Check `avatarIsSpeaking` blocks speech recognition
-- Verify 1-second buffer after avatar speech
-
-### Avatar interrupts incorrectly
-- Question detection only triggers on `?` or sentence-starting question phrases
-- Review `is_question` logic in `sales_coach_agent.py`
-- Adjust pause detection timeout (currently 4 seconds)
-
-### WebRTC connection slow
-- Normal: 10-20 seconds for initial connection
-- Azure Speech SDK backend processing time
-- Cannot be optimized further (server-side)
-
-## 📝 License
-
-MIT License - See LICENSE file for details
-
-## 🤝 Contributing
-
-Contributions welcome! Please:
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Submit a pull request
-
-## 📧 Support
-
-For issues or questions:
-- Open a GitHub issue
-- Check Azure AI Foundry documentation
-- Review Azure Speech Service avatar docs
-
----
-
-**Built with ❤️ using Azure AI Services**
+**Echo / feedback loop**
+- Browser AEC is enabled automatically; ensure headphones are used or room is quiet
+- Server-side echo cancellation is configured via Voice Live session params

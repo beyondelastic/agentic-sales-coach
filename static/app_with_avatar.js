@@ -1,895 +1,1049 @@
 /**
- * AI Sales Coach - Frontend JavaScript with Real-time Avatar
+ * AI Sales Coach — Voice Live edition
+ *
+ * Architecture: Browser ⟷ Voice Live WebSocket (direct, api-key in query param)
+ *   • Audio IN  : getUserMedia → AudioWorklet (pcm-worklet.js) → base64 PCM →
+ *                 input_audio_buffer.append events over WebSocket
+ *   • Audio OUT : Voice Live avatar → WebRTC stream (video + audio) → <video> element
+ *   • Transcript: conversation.item.input_audio_transcription.completed events
+ *                 → accumulated locally → POST /api/session/{id}/analyze on stop
+ *
+ * The old STT (Web Speech API) → WS text → backend GPT → TTS pipeline is replaced
+ * by a single managed Voice Live WebSocket connection with gpt-4.1, Azure STT, and
+ * Azure HD TTS voices. Server-side echo cancellation removes all manual timing hacks.
  */
 
-// Session variables
+// ============================================================================
+// STATE
+// ============================================================================
+
 let sessionId = null;
 let isRecording = false;
 let startTime = null;
-let transcriptAccumulator = "";
 
-// Avatar variables
-let avatarSynthesizer = null;
+// Voice Live WebSocket
+let voiceLiveWs = null;
+let voiceLiveConfig = null;
+let isConnected = false;
+
+// Avatar WebRTC
 let peerConnection = null;
-let avatarVideoElement = null;
-let isAvatarConnected = false;
-let avatarConfig = null;
 
-// Interactive mode variables
-let interactiveWebSocket = null;
-let isInteractiveMode = false;
-let lastTranscriptSent = "";
-let pauseTimer = null;
-let lastSpeechTime = Date.now();
-let hasRespondedToCurrentText = false;
-let avatarIsSpeaking = false;  // Track when avatar is talking
-let shouldRestartRecognition = true;  // Control auto-restart of recognition
-let currentUtterance = "";  // Track current speaking segment
-let recentAvatarSpeech = [];  // Track recent avatar utterances to filter feedback
-let avatarSpeechEndTime = 0;  // Track when avatar finished speaking
+// Audio capture
+let audioContext = null;
+let audioWorkletNode = null;
+let micStream = null;
+let silencerGain = null;
+let audioChunksSent = 0;
 
-// Speech Recognition setup
-let recognition = null;
-if ('webkitSpeechRecognition' in window) {
-    recognition = new webkitSpeechRecognition();
-} else if ('SpeechRecognition' in window) {
-    recognition = new SpeechRecognition();
-}
+// Transcript accumulation (for post-session analysis)
+let transcriptSegments = []; // [{speaker: "presenter"|"customer", text: string}]
+let userTranscriptText = "";  // plain user words — used for empty-check
 
-if (recognition) {
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = 'en-US';
-    
-    // Try to enable echo cancellation (browser-dependent)
-    try {
-        recognition.maxAlternatives = 1;
-    } catch (e) {
-        console.log('Could not set maxAlternatives:', e);
-    }
-    
-    recognition.onstart = function() {
-        console.log('Speech recognition started');
-    };
-    
-    recognition.onresult = function(event) {
-        // Don't process if avatar is currently speaking OR just finished recently
-        const timeSinceAvatarSpeech = Date.now() - avatarSpeechEndTime;
-        if (avatarIsSpeaking || timeSinceAvatarSpeech < 3000) {
-            console.log(`🚫 Blocked - avatar speaking: ${avatarIsSpeaking}, time since speech: ${timeSinceAvatarSpeech}ms`);
-            return;
-        }
-        
-        let interimTranscript = '';
-        let finalTranscript = '';
-        
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-            const transcript = event.results[i][0].transcript;
-            if (event.results[i].isFinal) {
-                finalTranscript += transcript + ' ';
-            } else {
-                interimTranscript += transcript;
-            }
-        }
-        
-        if (finalTranscript) {
-            // Check if this matches recent avatar speech (feedback detection)
-            const cleanTranscript = finalTranscript.trim().toLowerCase();
-            const isAvatarEcho = recentAvatarSpeech.some(avatarText => {
-                const similarity = stringSimilarity(cleanTranscript, avatarText.toLowerCase());
-                return similarity > 0.7;  // 70% similarity = likely echo
-            });
-            
-            if (isAvatarEcho) {
-                console.log('🚫 Filtered out avatar echo:', finalTranscript.substring(0, 50) + '...');
-                return;
-            }
-            
-            transcriptAccumulator += finalTranscript;
-            currentUtterance += finalTranscript;  // Add to current speaking segment
-            lastSpeechTime = Date.now();
-            hasRespondedToCurrentText = false;  // New speech, haven't responded yet
-            
-            // Send to WebSocket in interactive mode
-            if (isInteractiveMode && interactiveWebSocket && interactiveWebSocket.readyState === WebSocket.OPEN) {
-                const newText = transcriptAccumulator.substring(lastTranscriptSent.length).trim();
-                if (newText) {
-                    interactiveWebSocket.send(JSON.stringify({
-                        type: "transcript_update",
-                        text: newText
-                    }));
-                    lastTranscriptSent = transcriptAccumulator;
-                }
-            }
-            
-            // Reset pause timer
-            if (pauseTimer) {
-                clearTimeout(pauseTimer);
-            }
-            
-            // Only detect pause if in interactive mode and haven't responded yet
-            if (isInteractiveMode && interactiveWebSocket && 
-                interactiveWebSocket.readyState === WebSocket.OPEN && 
-                !hasRespondedToCurrentText) {
-                
-                // Wait 6 seconds of silence before avatar considers responding
-                pauseTimer = setTimeout(() => {
-                    const textToRespond = transcriptAccumulator.substring(lastTranscriptSent.length - transcriptAccumulator.length).trim();
-                    
-                    // Only send if there's substantial content (more than 10 words for better context)
-                    if (textToRespond.split(' ').length >= 10) {
-                        hasRespondedToCurrentText = true;
-                        
-                        // Create a new bubble for the completed utterance
-                        if (currentUtterance.trim()) {
-                            createUserBubble(currentUtterance.trim());
-                            currentUtterance = "";  // Reset for next utterance
-                        }
-                        
-                        interactiveWebSocket.send(JSON.stringify({
-                            type: "pause_detected",
-                            recent_text: textToRespond
-                        }));
-                    }
-                }, 6000);  // Increased to 6 seconds - longer pauses mean clearer turn-taking
-            }
-        }
-        
-        // Show current utterance + interim text (live update)
-        updateTranscriptDisplay(currentUtterance + interimTranscript);
-    };
-    
-    recognition.onerror = function(event) {
-        console.error('Speech recognition error:', event.error);
-        showError('Speech recognition error: ' + event.error);
-    };
-    
-    recognition.onend = function() {
-        console.log('Speech recognition ended');
-        if (isRecording && shouldRestartRecognition) {
-            console.log('Auto-restarting recognition');
-            recognition.start();
-        } else {
-            console.log('Not restarting - shouldRestartRecognition:', shouldRestartRecognition);
-        }
-    };
-}
+// Streaming avatar bubble state
+let avatarStreamingBubble = null;
+
+// Video emotion analysis
+let mediaRecorder = null;
+let recordedChunks = [];
+let userVideoStream = null;
+let isRecordingVideo = false;
+
+// Webcam frame capture for visual analysis
+let capturedFrames = [];
+let frameIntervalId = null;
+let cameraPreviewVideo = null; // off-screen video element used only for canvas drawing
+
+
 
 // ============================================================================
-// AVATAR FUNCTIONS
+// VOICE LIVE CONNECTION
 // ============================================================================
 
-// Helper function to calculate string similarity (Levenshtein distance based)
-function stringSimilarity(str1, str2) {
-    const longer = str1.length > str2.length ? str1 : str2;
-    const shorter = str1.length > str2.length ? str2 : str1;
-    
-    if (longer.length === 0) return 1.0;
-    
-    const editDistance = levenshteinDistance(longer, shorter);
-    return (longer.length - editDistance) / longer.length;
-}
-
-function levenshteinDistance(str1, str2) {
-    const matrix = [];
-    
-    for (let i = 0; i <= str2.length; i++) {
-        matrix[i] = [i];
-    }
-    
-    for (let j = 0; j <= str1.length; j++) {
-        matrix[0][j] = j;
-    }
-    
-    for (let i = 1; i <= str2.length; i++) {
-        for (let j = 1; j <= str1.length; j++) {
-            if (str2.charAt(i - 1) === str1.charAt(j - 1)) {
-                matrix[i][j] = matrix[i - 1][j - 1];
-            } else {
-                matrix[i][j] = Math.min(
-                    matrix[i - 1][j - 1] + 1,
-                    matrix[i][j - 1] + 1,
-                    matrix[i - 1][j] + 1
-                );
-            }
-        }
-    }
-    
-    return matrix[str2.length][str1.length];
-}
-
+/**
+ * Connect to Voice Live and set up the avatar WebRTC session.
+ * Called by the "Connect Avatar" button.
+ */
 async function connectAvatar() {
-    console.log('Connecting to avatar...');
-    updateAvatarStatus('🔄 Initializing avatar connection...');
-    
+    updateAvatarStatus("🔄 Connecting to Voice Live...");
+
     try {
-        // Get avatar configuration from backend
-        updateAvatarStatus('🔄 Requesting authentication token...');
-        const configResponse = await fetch('/api/avatar/config');
-        if (!configResponse.ok) {
-            throw new Error('Failed to get avatar configuration');
+        // 1. Fetch session config + instructions from backend
+        const configResp = await fetch("/api/voice-live/config");
+        if (!configResp.ok) {
+            const err = await configResp.json().catch(() => ({}));
+            throw new Error(err.detail || `Config fetch failed (${configResp.status})`);
         }
-        
-        avatarConfig = await configResponse.json();
-        console.log('Avatar config received:', {
-            region: avatarConfig.region,
-            character: avatarConfig.avatar_character,
-            style: avatarConfig.avatar_style,
-            voice: avatarConfig.voice_name,
-            hasKey: !!avatarConfig.subscription_key
-        });
-        
-        // Step 1: Create SpeechConfig with voice
-        updateAvatarStatus('🔄 Configuring speech synthesis...');
-        const speechConfig = SpeechSDK.SpeechConfig.fromSubscription(
-            avatarConfig.subscription_key,
-            avatarConfig.region
-        );
-        speechConfig.speechSynthesisVoiceName = avatarConfig.voice_name || "en-US-JennyNeural";
-        console.log('✓ SpeechConfig created');
-        
-        // Step 2: Fetch ICE server token
-        updateAvatarStatus('🔄 Fetching WebRTC connection token...');
-        const iceResponse = await fetch(
-            `https://${avatarConfig.region}.tts.speech.microsoft.com/cognitiveservices/avatar/relay/token/v1`,
-            {
-                method: 'GET',
-                headers: {
-                    'Ocp-Apim-Subscription-Key': avatarConfig.subscription_key
-                }
-            }
-        );
-        
-        if (!iceResponse.ok) {
-            throw new Error(`ICE server request failed: ${iceResponse.status}`);
-        }
-        
-        const iceData = await iceResponse.json();
-        const iceServerUrl = iceData.Urls[0];
-        const iceServerUsername = iceData.Username;
-        const iceServerCredential = iceData.Password;
-        console.log('✓ ICE server token received');
-        
-        // Step 3: Create AvatarConfig with remoteIceServers (CRITICAL!)
-        const videoFormat = new SpeechSDK.AvatarVideoFormat();
-        const sdkAvatarConfig = new SpeechSDK.AvatarConfig(
-            "lisa",  // lowercase as per official samples
-            avatarConfig.avatar_style || "casual-sitting",
-            videoFormat
-        );
-        
-        // CRITICAL: Set remoteIceServers BEFORE creating synthesizer
-        sdkAvatarConfig.remoteIceServers = [{
-            urls: [ iceServerUrl ],
-            username: iceServerUsername,
-            credential: iceServerCredential
-        }];
-        console.log('✓ AvatarConfig created with ICE servers');
-        
-        // Step 4: Create AvatarSynthesizer
-        avatarSynthesizer = new SpeechSDK.AvatarSynthesizer(speechConfig, sdkAvatarConfig);
-        console.log('✓ AvatarSynthesizer created');
-        
-        // Step 5: Setup WebRTC peer connection
-        updateAvatarStatus('Establishing connection...');
-        peerConnection = new RTCPeerConnection({
-            iceServers: [{
-                urls: [ iceServerUrl ],
-                username: iceServerUsername,
-                credential: iceServerCredential
-            }]
-        });
-        
-        // Monitor connection states
-        peerConnection.oniceconnectionstatechange = () => {
-            console.log('ICE connection state:', peerConnection.iceConnectionState);
-            if (peerConnection.iceConnectionState === 'connected') {
-                // Don't update status here - let the main flow handle it
-                console.log('✓ Avatar WebRTC connected!');
-            } else if (peerConnection.iceConnectionState === 'failed' || 
-                       peerConnection.iceConnectionState === 'disconnected') {
-                isAvatarConnected = false;
-                updateAvatarStatus('⚠️ Disconnected');
-            }
+        voiceLiveConfig = await configResp.json();
+
+        // 2. Create a session record on the backend (used by the analyze endpoint later)
+        const sessionResp = await fetch("/api/session/start", { method: "POST" });
+        if (!sessionResp.ok) throw new Error("Failed to start backend session");
+        sessionId = (await sessionResp.json()).session_id;
+        console.log("Session started:", sessionId);
+
+        // 3. Open a direct WebSocket to Voice Live.
+        //    The API key is in the query string — encrypted over wss.
+        console.log("[VoiceLive] Connecting to:", voiceLiveConfig.ws_url);
+        const wsUrl = `${voiceLiveConfig.ws_url}&api-key=${encodeURIComponent(voiceLiveConfig.api_key)}`;
+        voiceLiveWs = new WebSocket(wsUrl);
+        voiceLiveWs.onmessage = handleVoiceLiveMessage;
+        voiceLiveWs.onerror   = (evt) => {
+            console.error("[VoiceLive] WebSocket error event:", evt);
+            // Note: browsers do not expose HTTP status in onerror — wait for onclose for code/reason.
         };
-        
-        // Handle incoming video/audio tracks
-        peerConnection.ontrack = (event) => {
-            console.log('Track received:', event.track.kind);
-            
-            if (event.track.kind === 'video') {
-                // Get the existing avatar video element (not container!)
-                avatarVideoElement = document.getElementById('avatarVideo');
-                if (!avatarVideoElement) {
-                    console.error('Avatar video element not found!');
-                    return;
-                }
-                
-                // Set the stream directly on the existing video element
-                avatarVideoElement.srcObject = event.streams[0];
-                avatarVideoElement.muted = false;
-                
-                // Ensure video plays when ready
-                avatarVideoElement.onloadedmetadata = () => {
-                    console.log('Video metadata loaded, playing...');
-                    avatarVideoElement.play().then(() => {
-                        console.log('✓ Video playing successfully');
-                    }).catch(err => {
-                        console.error('Video play error:', err);
-                    });
-                };
-                
-                console.log('✓ Video stream connected to element');
-                
-            } else if (event.track.kind === 'audio') {
-                // Create audio element (unmuted)
-                const audioElement = document.createElement('audio');
-                audioElement.srcObject = event.streams[0];
-                audioElement.autoplay = true;
-                audioElement.muted = false;
-                document.body.appendChild(audioElement);
-                console.log('✓ Audio track added');
-            }
-        };
-        
-        // Add transceivers
-        peerConnection.addTransceiver('video', { direction: 'sendrecv' });
-        peerConnection.addTransceiver('audio', { direction: 'sendrecv' });
-        
-        // Step 6: Start avatar
-        updateAvatarStatus('🔄 Establishing WebRTC connection...');
-        
-        // Track if we've already succeeded via connection state
-        let avatarReady = false;
-        
-        const result = await new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => {
-                // If ICE is connected and we have video, consider it successful
-                if (peerConnection.iceConnectionState === 'connected' && avatarVideoElement) {
-                    console.log('✓ Avatar connected via WebRTC (callback timeout bypassed)');
-                    resolve({ reason: SpeechSDK.ResultReason.SynthesizingAudioCompleted });
-                } else {
-                    reject(new Error('Avatar start timeout - this can take 10-20 seconds, please wait'));
-                }
-            }, 30000); // 30 seconds is reasonable for Azure Speech SDK
-            
-            avatarSynthesizer.startAvatarAsync(peerConnection, (r) => {
-                clearTimeout(timeout);
-                console.log('✓ startAvatarAsync callback received');
-                resolve(r);
-            }, (err) => {
-                clearTimeout(timeout);
-                reject(err);
-            });
+        voiceLiveWs.onclose   = onVoiceLiveClosed;
+
+        await new Promise((resolve, reject) => {
+            const t = setTimeout(() => reject(new Error("Connection timeout (15 s)")), 15000);
+            // Capture the original onclose so we can restore it after a successful open.
+            const origClose = voiceLiveWs.onclose;
+            voiceLiveWs.onopen = () => {
+                clearTimeout(t);
+                // Restore the original close handler so normal close handling runs.
+                voiceLiveWs.onclose = origClose;
+                resolve();
+            };
+            // Override onclose inside the promise so a fast rejection (e.g. 401/404) rejects
+            voiceLiveWs.onclose = (evt) => {
+                clearTimeout(t);
+                voiceLiveWs.onclose = origClose;
+                const reason = evt.reason || "(no reason sent by server)";
+                reject(new Error(`WebSocket closed before open — code ${evt.code}: ${reason}`));
+            };
         });
-        
-        if (result.reason === SpeechSDK.ResultReason.SynthesizingAudioCompleted) {
-            console.log('✓ Avatar started successfully!');
-            isAvatarConnected = true;
-            updateAvatarStatus('✅ Avatar connected - Ready for interactive presentation');
-            document.getElementById('connectAvatarBtn').disabled = true;
-            document.getElementById('disconnectAvatarBtn').disabled = false;
-            document.getElementById('avatarMessage').style.display = 'block';
-            
-            // Set up WebSocket for interactive mode
-            setupInteractiveWebSocket();
-            
-            return true;
-        } else if (result.reason === SpeechSDK.ResultReason.Canceled) {
-            const details = SpeechSDK.CancellationDetails.fromResult(result);
-            throw new Error(details.errorDetails);
-        }
-        
+
+        // 4. Configure the session — persona, voice, avatar, turn detection, noise/echo.
+        //    gpt-4.1 uses the Azure STT + Azure TTS pipeline (best transcription quality
+        //    and HD Neural voices); gpt-realtime uses native audio (lower latency but less
+        //    voice control — suboptimal for structured sales-pitch practice).
+        sendEvent({
+            type: "session.update",
+            session: {
+                instructions: voiceLiveConfig.instructions,
+                modalities: ["text", "audio", "avatar"],
+                voice: {
+                    name: voiceLiveConfig.voice_name,   // e.g. en-US-Ava:DragonHDLatestNeural
+                    type: "azure-standard",
+                },
+                // 16-bit PCM at 24 kHz mono — matches the AudioWorklet output format.
+                input_audio_format: "pcm16",
+                // Azure STT provides clean transcription events for the post-session report.
+                input_audio_transcription: {
+                    model: "azure-speech",
+                    language: "en",
+                },
+                // Server-side AEC subtracts the avatar's own outgoing audio from the
+                // incoming mic stream, as a second line of defence after browser AEC.
+                input_audio_echo_cancellation: { type: "server_echo_cancellation" },
+                // server_vad: auto-detect end-of-turn and automatically create a response.
+                // threshold raised to 0.7 to reduce false triggers from residual echo.
+                turn_detection: {
+                    type: "server_vad",
+                    threshold: 0.7,
+                    prefix_padding_ms: 300,
+                    silence_duration_ms: 800,
+                    create_response: true,
+                    interrupt_response: true,
+                },
+                // Avatar block — omit ice_servers; Voice Live returns them in session.updated.
+                avatar: {
+                    type: "video-avatar",
+                    character: voiceLiveConfig.avatar_character,
+                    style: voiceLiveConfig.avatar_style,
+                    customized: false,
+                },
+            },
+        });
+
+        updateAvatarStatus("🔄 Waiting for avatar ICE servers...");
+
     } catch (error) {
-        console.error('Error connecting avatar:', error);
-        updateAvatarStatus('Connection failed');
-        showError('Failed to connect avatar: ' + error.message);
-        isAvatarConnected = false;
-        return false;
+        console.error("Voice Live connect error:", error);
+        updateAvatarStatus("Connection failed");
+        showError("Failed to connect: " + error.message);
     }
 }
 
-function setupInteractiveWebSocket() {
-    console.log('Setting up interactive WebSocket...');
-    
-    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${wsProtocol}//${window.location.host}/ws/interactive`;
-    
-    interactiveWebSocket = new WebSocket(wsUrl);
-    
-    interactiveWebSocket.onopen = () => {
-        console.log('✓ Interactive WebSocket connected');
-        // Don't send start_session yet - wait for user to start recording
-    };
-    
-    interactiveWebSocket.onmessage = (event) => {
-        const message = JSON.parse(event.data);
-        console.log('WebSocket message:', message);
-        
-        if (message.type === 'avatar_speak') {
-            // Set flag IMMEDIATELY before any processing to block speech recognition
-            avatarIsSpeaking = true;
-            console.log('Avatar about to speak - blocking mic input');
-            
-            // Track avatar speech for echo detection
-            recentAvatarSpeech.push(message.text);
-            // Keep only last 3 avatar utterances
-            if (recentAvatarSpeech.length > 3) {
-                recentAvatarSpeech.shift();
+/** Send a JSON event on the Voice Live WebSocket. */
+function sendEvent(event) {
+    if (voiceLiveWs && voiceLiveWs.readyState === WebSocket.OPEN) {
+        voiceLiveWs.send(JSON.stringify(event));
+    }
+}
+
+/** Central handler for all Voice Live server → client events. */
+async function handleVoiceLiveMessage(event) {
+    let msg;
+    try { msg = JSON.parse(event.data); } catch { return; }
+
+    switch (msg.type) {
+
+        // Session ready — server returns ICE servers for the avatar WebRTC stream
+        case "session.updated":
+            console.log("[VoiceLive] session.updated FULL:", JSON.stringify(msg.session));
+            if (msg.session?.avatar !== undefined) {
+                // Avatar was configured — get ICE servers (may be nested differently)
+                const iceServers = msg.session.avatar?.ice_servers
+                    ?? msg.session.avatar?.iceServers
+                    ?? msg.session.ice_servers
+                    ?? [];
+                console.log("[VoiceLive] ICE servers from session.updated:", JSON.stringify(iceServers));
+                if (iceServers.length === 0) {
+                    console.warn("[VoiceLive] No ICE servers in session.updated — using public STUN fallback");
+                }
+                await setupAvatarWebRTC(iceServers);
+            } else if (!isConnected) {
+                onVoiceLiveConnected();   // Audio-only mode (no avatar configured)
             }
-            
-            // Remove any live preview bubble before avatar speaks
-            const livePreview = document.getElementById('transcriptBox').querySelector('[data-speaker="user-live"]');
-            if (livePreview) {
-                livePreview.remove();
-            }
-            
-            // Make avatar speak and show in transcript
-            updateTranscriptDisplay(message.text, 'Avatar');
-            speakToAvatar(message.text);
-        } else if (message.type === 'coaching_report') {
-            // Display final coaching report
-            displayReport(message.report);
-            updateAvatarStatus('Coaching complete');
-            resetUI();
-        }
-    };
-    
-    interactiveWebSocket.onerror = (error) => {
-        console.error('WebSocket error:', error);
-        isInteractiveMode = false;
-    };
-    
-    interactiveWebSocket.onclose = () => {
-        console.log('Interactive WebSocket closed');
-        isInteractiveMode = false;
-    };
-}
+            break;
 
-async function disconnectAvatar() {
-    console.log('Disconnecting avatar...');
-    updateAvatarStatus('Disconnecting...');
-    
-    // Close WebSocket
-    if (interactiveWebSocket) {
-        interactiveWebSocket.close();
-        interactiveWebSocket = null;
-        isInteractiveMode = false;
-    }
-    
-    if (avatarSynthesizer) {
-        await avatarSynthesizer.stopAvatarAsync();
-        avatarSynthesizer.close();
-        avatarSynthesizer = null;
-    }
-    
-    if (peerConnection) {
-        peerConnection.close();
-        peerConnection = null;
-    }
-    
-    if (avatarVideoElement) {
-        avatarVideoElement.srcObject = null;
-    }
-    
-    isAvatarConnected = false;
-    updateAvatarStatus('Disconnected');
-    document.getElementById('connectAvatarBtn').disabled = false;
-    document.getElementById('disconnectAvatarBtn').disabled = true;
-    document.getElementById('avatarMessage').style.display = 'none';
-    
-    console.log('Avatar disconnected');
-}
-
-function speakToAvatar(text) {
-    if (!avatarSynthesizer || !isAvatarConnected) {
-        console.log('Avatar not connected, skipping speech');
-        avatarIsSpeaking = false;  // Ensure flag is cleared
-        return;
-    }
-    
-    console.log('Avatar speaking:', text.substring(0, 50) + '...');
-    
-    // Flag should already be set by the caller, but ensure it's set
-    avatarIsSpeaking = true;
-    updateAvatarStatus('🗣️ Avatar speaking...');
-    
-    // CRITICAL: Stop speech recognition to prevent feedback
-    if (recognition && isRecording) {
-        console.log('🔇 Stopping speech recognition during avatar speech');
-        shouldRestartRecognition = false;  // Prevent auto-restart
-        recognition.stop();
-    }
-    
-    avatarSynthesizer.speakTextAsync(text).then((result) => {
-        if (result.reason === SpeechSDK.ResultReason.SynthesizingAudioCompleted) {
-            console.log("Avatar speech completed - waiting for audio playback to finish");
-            // INCREASED BUFFER: Wait longer for audio to fully finish playing
-            // The synthesizer completes before audio finishes playing through speakers
-            setTimeout(() => {
-                avatarIsSpeaking = false;
-                avatarSpeechEndTime = Date.now();  // Track when avatar finished
-                updateAvatarStatus('👂 Listening...');
-                console.log('Avatar audio playback complete - restarting mic in 1 second');
-                
-                // Add another delay before actually restarting to ensure audio is fully done
-                setTimeout(() => {
-                    shouldRestartRecognition = true;  // Re-enable auto-restart
-                    if (isRecording && recognition) {
-                        console.log('✅ Restarting speech recognition');
-                        recognition.start();
+        // Avatar WebRTC: server answer SDP
+        case "session.avatar.connecting":
+            console.log("[VoiceLive] session.avatar.connecting received; full msg:", JSON.stringify(msg));
+            updateAvatarStatus("🔄 WebRTC: Setting remote description...");
+            if (peerConnection) {
+                const rawServerSdp = msg.server_sdp ?? msg.sdp;
+                if (!rawServerSdp) {
+                    console.error("[VoiceLive] session.avatar.connecting had no server_sdp field!");
+                    showError("Avatar error: server sent no SDP in session.avatar.connecting");
+                    break;
+                }
+                try {
+                    // server_sdp = base64(JSON.stringify({type:"answer", sdp:"..."}))
+                    // Try to decode as base64-JSON-descriptor first, fall back to raw.
+                    let answerSdp;
+                    try {
+                        const decoded = atob(rawServerSdp);
+                        const descriptor = JSON.parse(decoded);
+                        answerSdp = descriptor.sdp ?? decoded;
+                        console.log("[VoiceLive] server_sdp decoded as base64-JSON descriptor OK");
+                    } catch (e) {
+                        // Maybe it's base64 of raw SDP, or raw SDP directly
+                        try { answerSdp = atob(rawServerSdp); } catch { answerSdp = rawServerSdp; }
+                        console.warn("[VoiceLive] server_sdp fallback decode:", e.message);
                     }
-                }, 1000);  // Additional 1 second buffer
-            }, 3000);  // Increased to 3 seconds for audio playback completion
-        } else {
-            console.error("Avatar speech failed:", result.errorDetails);
-            avatarIsSpeaking = false;
-            shouldRestartRecognition = true;
-            updateAvatarStatus('👂 Listening...');
-            if (isRecording && recognition) {
-                recognition.start();
+                    await peerConnection.setRemoteDescription({ type: "answer", sdp: answerSdp });
+                    console.log("[VoiceLive] setRemoteDescription OK; ICE state:", peerConnection.iceConnectionState);
+                    updateAvatarStatus("🔄 WebRTC: ICE negotiating...");
+                } catch (err) {
+                    console.error("[VoiceLive] setRemoteDescription failed:", err);
+                    showError("Avatar WebRTC error: " + err.message);
+                }
             }
-        }
-    }).catch((error) => {
-        console.error("Avatar speech error:", error);
-        avatarIsSpeaking = false;
-        shouldRestartRecognition = true;
-        updateAvatarStatus('👂 Listening...');
-        if (isRecording && recognition) {
-            recognition.start();
-        }
-    });
-}
+            break;
 
-function updateAvatarStatus(status) {
-    const statusElement = document.getElementById('avatarStatus');
-    if (statusElement) {
-        statusElement.textContent = status;
+        // VAD detected speech start
+        case "input_audio_buffer.speech_started":
+            console.log("[VoiceLive] VAD: speech_started (item", msg.item_id, ")");
+            updateAvatarStatus("👂 Listening — speech detected...");
+            break;
+
+        // VAD detected end of speech — buffer will be auto-committed
+        case "input_audio_buffer.speech_stopped":
+            console.log("[VoiceLive] VAD: speech_stopped (item", msg.item_id, ")");
+            updateAvatarStatus("🔄 Processing your speech...");
+            break;
+
+        // Audio buffer committed to conversation history
+        case "input_audio_buffer.committed":
+            console.log("[VoiceLive] Audio buffer committed, item:", msg.item_id);
+            break;
+
+        // Response generation started — flush any bubble left over from an interrupted previous response
+        case "response.created":
+            if (avatarStreamingBubble) {
+                const leftover = avatarStreamingBubble.querySelector(".avatar-text")?.textContent?.trim();
+                if (leftover && /\w/.test(leftover)) {
+                    // Partial speech from the interrupted turn — keep it, mark as done
+                    avatarStreamingBubble.style.opacity = "1";
+                } else {
+                    // Nothing useful was spoken — remove the empty bubble
+                    avatarStreamingBubble.remove();
+                }
+                avatarStreamingBubble = null;
+            }
+            console.log("[VoiceLive] Response generation started:", msg.response?.id);
+            updateAvatarStatus("💬 Avatar responding...");
+            break;
+
+        // User speech fully transcribed — accumulate for the post-session report
+        case "conversation.item.input_audio_transcription.completed": {
+            const userText = msg.transcript?.trim();
+            if (userText) {
+                userTranscriptText += userText + " ";
+                transcriptSegments.push({ speaker: "presenter", text: userText });
+                createUserBubble(userText);
+            }
+            break;
+        }
+
+        // Assistant response text (streaming deltas) — show in transcript while avatar speaks
+        case "response.audio_transcript.delta":
+            if (msg.delta) updateAvatarStreamingText(msg.delta);
+            break;
+
+        // Assistant response complete — Voice Live delivers the full transcript here.
+        // Try part.transcript (audio parts) first, then part.text (text parts).
+        case "response.content_part.done": {
+            const assistantText = (msg.part?.transcript || msg.part?.text || "").trim();
+            // Require at least one word character — filters whitespace-only / punctuation-only fragments
+            // from interrupted responses that would otherwise appear as blank coach bubbles.
+            if (assistantText && /\w/.test(assistantText)) {
+                console.log("[VoiceLive] Coach said:", assistantText.slice(0, 80));
+                transcriptSegments.push({ speaker: "customer", text: assistantText });
+                finalizeAvatarMessage(assistantText);
+            } else if (avatarStreamingBubble) {
+                // Response was interrupted before a valid transcript arrived.
+                // Salvage whatever streaming-delta text already accumulated in the bubble.
+                const deltaText = avatarStreamingBubble.querySelector(".avatar-text")?.textContent?.trim();
+                if (deltaText && /\w/.test(deltaText)) {
+                    console.log("[VoiceLive] Coach (interrupted, using delta):", deltaText.slice(0, 80));
+                    transcriptSegments.push({ speaker: "customer", text: deltaText });
+                    avatarStreamingBubble.style.opacity = "1";
+                } else {
+                    avatarStreamingBubble.remove();
+                }
+                avatarStreamingBubble = null;
+            }
+            break;
+        }
+
+        case "error": {
+            const errCode = msg.error?.code;
+            // response_cancel_not_active fires when response.cancel is sent after the
+            // greeting has already finished — benign race, suppress it.
+            if (errCode === "response_cancel_not_active") {
+                console.log("[VoiceLive] response.cancel was a no-op (response already done) — ignoring");
+                break;
+            }
+            console.error("[VoiceLive] ERROR:", JSON.stringify(msg.error));
+            showError(`Voice Live: ${msg.error?.message || JSON.stringify(msg.error)}`);
+            break;
+        }
+
+        default:
+            // Log ALL unhandled events at info level so we can diagnose handshake issues
+            console.log("[VoiceLive] unhandled event:", msg.type, JSON.stringify(msg).slice(0, 300));
+            break;
     }
 }
+
+function onVoiceLiveConnected() {
+    isConnected = true;
+    updateAvatarStatus("✅ Ready — start your presentation");
+    document.getElementById("connectAvatarBtn").disabled = true;
+    document.getElementById("disconnectAvatarBtn").disabled = false;
+    const msg = document.getElementById("avatarMessage");
+    if (msg) { msg.style.display = "block"; msg.textContent = "Voice Live connected. Click 'Start Presentation' when ready."; }
+}
+
+function onVoiceLiveClosed(evt) {
+    if (evt) {
+        console.warn(`[VoiceLive] Connection closed — code: ${evt.code}, reason: "${evt.reason || '(none)'}", clean: ${evt.wasClean}`);
+    }
+    isConnected = false;
+    updateAvatarStatus("Disconnected");
+    document.getElementById("connectAvatarBtn").disabled = false;
+    document.getElementById("disconnectAvatarBtn").disabled = true;
+    const msg = document.getElementById("avatarMessage");
+    if (msg) msg.style.display = "none";
+}
+
+/** Disconnect from Voice Live and tear down WebRTC. */
+async function disconnectAvatar() {
+    stopRecordingInternal();
+
+    if (voiceLiveWs) {
+        voiceLiveWs.onclose = null;   // suppress UI update inside onVoiceLiveClosed
+        voiceLiveWs.close();
+        voiceLiveWs = null;
+    }
+    if (peerConnection) { peerConnection.close(); peerConnection = null; }
+
+    const video = document.getElementById("avatarVideo");
+    if (video) video.srcObject = null;
+
+    isConnected = false;
+    sessionId = null;
+    onVoiceLiveClosed();
+}
+
 
 // ============================================================================
-// RECORDING FUNCTIONS
+// AVATAR WEBRTC  (ICE + SDP negotiation via Voice Live WebSocket)
+// ============================================================================
+
+async function setupAvatarWebRTC(iceServers) {
+    // Always include at least one public STUN server so ICE can work even without TURN
+    const allIceServers = iceServers.length > 0
+        ? iceServers
+        : [{ urls: "stun:stun.l.google.com:19302" }];
+    console.log("[VoiceLive] Creating RTCPeerConnection with ICE servers:", JSON.stringify(allIceServers));
+    peerConnection = new RTCPeerConnection({ iceServers: allIceServers });
+
+    // Receive-only — mic audio travels via WebSocket PCM, NOT via WebRTC.
+    peerConnection.addTransceiver("video", { direction: "recvonly" });
+    peerConnection.addTransceiver("audio", { direction: "recvonly" });
+
+    const videoEl = document.getElementById("avatarVideo");
+
+    peerConnection.ontrack = (event) => {
+        console.log("[VoiceLive] ontrack fired — kind:", event.track.kind,
+                    "streams:", event.streams.length,
+                    "stream id:", event.streams[0]?.id ?? "none");
+        // Attach the stream to the video element on the first track (video or audio)
+        if (event.streams[0] && !videoEl.srcObject) {
+            videoEl.srcObject = event.streams[0];
+            videoEl.muted = false;
+            console.log("[VoiceLive] srcObject set from ontrack stream");
+            videoEl.play().catch(e => console.warn("[VoiceLive] video.play() blocked:", e));
+        }
+        if (event.track.kind === "video") {
+            onVoiceLiveConnected();
+        }
+    };
+
+    peerConnection.oniceconnectionstatechange = () => {
+        const state = peerConnection.iceConnectionState;
+        console.log("[VoiceLive] ICE connection state:", state);
+        updateAvatarStatus("🔄 WebRTC ICE: " + state);
+        if (state === "connected" || state === "completed") {
+            updateAvatarStatus("🔄 WebRTC ICE connected, waiting for track...");
+            // Log transceiver receiver-track states for diagnostics.
+            // NOTE: receiver.track always exists (dormant) once addTransceiver() is called,
+            //       so we must NOT use it to set isConnected — ontrack handles that correctly.
+            for (const transceiver of peerConnection.getTransceivers()) {
+                const track = transceiver.receiver?.track;
+                console.log("[VoiceLive] Transceiver receiver track:", track?.kind, track?.readyState);
+            }
+            // Always send response.create so the avatar starts its opening greeting and
+            // begins streaming video/audio via WebRTC (which will fire ontrack → onVoiceLiveConnected).
+            console.log("[VoiceLive] ICE connected — triggering initial avatar response");
+            sendEvent({ type: "response.create" });
+        } else if (state === "failed") {
+            showError("Avatar ICE connection failed. Check that UDP/TURN ports are accessible.");
+        } else if (state === "disconnected") {
+            updateAvatarStatus("⚠️ Avatar connection lost");
+        }
+    };
+
+    peerConnection.onicegatheringstatechange = () => {
+        console.log("[VoiceLive] ICE gathering state:", peerConnection.iceGatheringState);
+    };
+
+    peerConnection.onicecandidate = (event) => {
+        console.log("[VoiceLive] ICE candidate:", event.candidate ? event.candidate.type + "/" + event.candidate.protocol : "(end-of-candidates)");
+    };
+
+    const offer = await peerConnection.createOffer();
+    await peerConnection.setLocalDescription(offer);
+    updateAvatarStatus("🔄 Gathering ICE candidates...");
+
+    // Wait for ICE gathering with a 15 s safety timeout
+    await new Promise((resolve) => {
+        if (peerConnection.iceGatheringState === "complete") { resolve(); return; }
+        const timer = setTimeout(() => {
+            console.warn("[VoiceLive] ICE gathering timed out after 15 s — sending partial SDP");
+            resolve();
+        }, 15000);
+        peerConnection.addEventListener("icegatheringstatechange", () => {
+            if (peerConnection.iceGatheringState === "complete") { clearTimeout(timer); resolve(); }
+        });
+    });
+
+    const finalSdp = peerConnection.localDescription.sdp;
+    // Server expects client_sdp = base64(JSON.stringify({type, sdp})) — not just the raw SDP text.
+    // It does: json.loads(base64.decode(client_sdp)) server-side.
+    const sdpDescriptor = JSON.stringify({ type: "offer", sdp: finalSdp });
+    console.log("[VoiceLive] Sending SDP offer (length:", finalSdp.length, ")");
+    sendEvent({ type: "session.avatar.connect", client_sdp: btoa(sdpDescriptor) });
+    updateAvatarStatus("🔄 Waiting for server SDP answer...");
+    console.log("[VoiceLive] session.avatar.connect sent");
+
+    // Fail visibly if no track arrives within 30 s
+    setTimeout(() => {
+        if (!isConnected) {
+            const iceState = peerConnection?.iceConnectionState ?? "unknown";
+            console.error("[VoiceLive] WebRTC handshake timed out. ICE state was:", iceState);
+            showError(`Avatar timed out (ICE state: ${iceState}). Check browser console for details.`);
+        }
+    }, 30000);
+}
+
+
+// ============================================================================
+// AUDIO CAPTURE  (microphone → PCM16 → Voice Live WebSocket)
+// ============================================================================
+
+async function startAudioCapture() {
+    // echoCancellation + noiseSuppression must be ENABLED so the browser's AEC
+    // removes the avatar's audio (played via the <video> element) from the mic
+    // signal before it reaches Voice Live.  Without this the avatar hears itself,
+    // VAD fires on its own voice, and every response gets interrupted.
+    micStream = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
+
+    audioContext = new AudioContext({ sampleRate: 24000 });
+    await audioContext.audioWorklet.addModule("/static/pcm-worklet.js");
+
+    const source = audioContext.createMediaStreamSource(micStream);
+    audioWorkletNode = new AudioWorkletNode(audioContext, "pcm-processor");
+
+    audioWorkletNode.port.onmessage = (event) => {
+        if (!voiceLiveWs || voiceLiveWs.readyState !== WebSocket.OPEN) return;
+        sendEvent({ type: "input_audio_buffer.append", audio: uint8ToBase64(new Uint8Array(event.data)) });
+        audioChunksSent++;
+        if (audioChunksSent === 1 || audioChunksSent % 200 === 0) {
+            console.log("[VoiceLive] Mic audio chunks sent:", audioChunksSent);
+        }
+    };
+
+    // Silent gain node required to "pull" the audio graph (AudioContext won't process
+    // nodes that aren't reachable from the destination).
+    silencerGain = audioContext.createGain();
+    silencerGain.gain.value = 0;
+    source.connect(audioWorkletNode);
+    audioWorkletNode.connect(silencerGain);
+    silencerGain.connect(audioContext.destination);
+
+    console.log("Audio capture started (24 kHz PCM → Voice Live)");
+}
+
+function stopAudioCapture() {
+    if (audioWorkletNode) { audioWorkletNode.disconnect(); audioWorkletNode = null; }
+    if (silencerGain)     { silencerGain.disconnect();     silencerGain = null; }
+    if (audioContext)     { audioContext.close();           audioContext = null; }
+    if (micStream)        { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+    console.log("Audio capture stopped. Total mic chunks sent:", audioChunksSent);
+    audioChunksSent = 0;
+}
+
+/** Fast base64 encoding of a Uint8Array (chunked to avoid stack overflow). */
+function uint8ToBase64(bytes) {
+    let binary = "";
+    const CHUNK = 8192;
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+    }
+    return btoa(binary);
+}
+
+
+// ============================================================================
+// RECORDING CONTROL
 // ============================================================================
 
 async function startRecording() {
-    if (!recognition) {
-        showError('Speech recognition not supported in this browser. Please use Chrome or Edge.');
-        return;
-    }
-    
-    if (!isAvatarConnected) {
-        showError('Please connect the avatar first before starting your presentation.');
-        return;
-    }
-    
+    if (!isConnected) { showError("Please connect the avatar first."); return; }
+
     try {
-        // Request microphone permission
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        stream.getTracks().forEach(track => track.stop());
-        
-        // Start new session
-        const response = await fetch('/api/session/start', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' }
-        });
-        
-        if (!response.ok) {
-            throw new Error('Failed to start session');
-        }
-        
-        const data = await response.json();
-        sessionId = data.session_id;
-        
-        // Signal WebSocket that session is starting
-        if (interactiveWebSocket && interactiveWebSocket.readyState === WebSocket.OPEN) {
-            isInteractiveMode = true;
-            interactiveWebSocket.send(JSON.stringify({
-                type: "start_session"
-            }));
-            console.log('Sent start_session signal');
-        }
-        
-        // Reset state
-        transcriptAccumulator = "";
-        lastTranscriptSent = "";
-        currentUtterance = "";  // Reset current utterance
+        transcriptSegments = [];
+        userTranscriptText = "";
+        avatarStreamingBubble = null;
         startTime = Date.now();
         isRecording = true;
-        hasRespondedToCurrentText = false;
-        
-        // Update UI
-        updateStatus('recording');
-        document.getElementById('startBtn').disabled = true;
-        document.getElementById('stopBtn').disabled = false;
-        document.getElementById('reportContainer').classList.remove('visible');
-        
-        // Clear transcript display
-        const box = document.getElementById('transcriptBox');
-        box.innerHTML = '<span style="opacity: 0.5;">Your presentation transcript will appear here as you speak...</span>';
-        
-        // Update avatar
-        updateAvatarStatus('Listening...');
-        
-        // Start speech recognition
-        recognition.start();
-        
-        console.log('Recording started, session:', sessionId);
-        
+
+        updateStatus("recording");
+        updateAvatarStatus("👂 Listening...");
+        document.getElementById("startBtn").disabled = true;
+        document.getElementById("stopBtn").disabled = false;
+        document.getElementById("reportContainer").classList.remove("visible");
+        document.getElementById("transcriptBox").innerHTML =
+            '<span class="transcript-placeholder" style="opacity:0.5">Your presentation transcript will appear here as you speak...</span>';
+
+        const notice = document.getElementById("cameraNotice");
+        if (notice) {
+            notice.classList.add("recording");
+            notice.querySelector("strong").textContent = "🔴 Recording in Progress";
+            notice.querySelector("small").textContent =
+                "Camera active — video is recorded locally and deleted immediately after the session.";
+        }
+
+        // Cancel any pending/in-flight response from the initial greeting so Voice Live
+        // enters idle state and will respond to user VAD input immediately.
+        sendEvent({ type: "response.cancel" });
+
+        await startVideoCapture();
+        startFrameCapture();
+        await startAudioCapture();
+
+        // Browser autoplay policy may have blocked avatar audio/video before user interaction.
+        // Now that we're inside a click handler, explicitly resume playback.
+        const avatarVideoEl = document.getElementById("avatarVideo");
+        if (avatarVideoEl && avatarVideoEl.paused) {
+            avatarVideoEl.play().catch(e => console.warn("[VoiceLive] avatarVideo.play() on start:", e));
+        }
+        if (audioContext && audioContext.state === "suspended") {
+            audioContext.resume().catch(e => console.warn("[VoiceLive] audioContext.resume():", e));
+        }
+
+        console.log("Presentation started, session:", sessionId);
+
     } catch (error) {
-        console.error('Error starting recording:', error);
-        showError('Failed to start recording: ' + error.message);
+        console.error("Error starting recording:", error);
+        showError("Failed to start recording: " + error.message);
+        isRecording = false;
+        resetUI();
     }
 }
 
 async function stopRecording() {
     if (!isRecording) return;
-    
-    isRecording = false;
-    
-    // Stop speech recognition
-    if (recognition) {
-        recognition.stop();
+    stopRecordingInternal();
+
+    updateStatus("analyzing");
+    updateAvatarStatus("Analyzing presentation...");
+    document.getElementById("stopBtn").disabled = true;
+
+    const processingIndicator = document.getElementById("processingIndicator");
+    if (processingIndicator) {
+        processingIndicator.classList.add("visible");
+        processingIndicator.textContent = "Analyzing presentation...";
     }
-    
-    // Update UI
-    updateStatus('analyzing');
-    updateAvatarStatus('Analyzing presentation...');
-    document.getElementById('stopBtn').disabled = true;
-    
-    // Calculate duration
+
     const duration = (Date.now() - startTime) / 1000;
-    
-    console.log('Recording stopped. Duration:', duration, 'seconds');
-    console.log('Transcript:', transcriptAccumulator);
-    
-    if (!transcriptAccumulator.trim()) {
-        showError('No speech detected. Please try again and speak into your microphone.');
+
+    if (!userTranscriptText.trim()) {
+        showError("No speech detected. Please try again and speak into your microphone.");
         resetUI();
-        updateAvatarStatus('Ready');
+        updateAvatarStatus("Ready");
+        if (processingIndicator) processingIndicator.classList.remove("visible");
         return;
     }
-    
-    // In interactive mode, signal end via WebSocket
-    if (isInteractiveMode && interactiveWebSocket && interactiveWebSocket.readyState === WebSocket.OPEN) {
-        interactiveWebSocket.send(JSON.stringify({
-            type: "end_presentation",
-            duration: duration
-        }));
-        // Report will come back via WebSocket
-        console.log('Sent end_presentation signal via WebSocket');
-        return;
-    }
-    
-    // Fallback to REST API for non-interactive mode
+
     try {
-        const analyzeResponse = await fetch(`/api/session/${sessionId}/analyze`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                transcript: transcriptAccumulator,
-                duration: duration
-            })
-        });
-        
-        if (!analyzeResponse.ok) {
-            throw new Error('Analysis failed');
+        // Build the full conversation transcript (presenter + customer turns)
+        const fullTranscript = transcriptSegments.map(s => `${s.speaker.toUpperCase()}: ${s.text}`).join("\n");
+        const allFrames = capturedFrames.splice(0); // clear the array immediately
+
+        // Evenly sample up to frame_max_count frames so the POST payload stays bounded
+        // regardless of session length, and coverage is spread across the whole session
+        const maxFrames = voiceLiveConfig?.frame_max_count ?? 20;
+        const framesToSend = allFrames.length <= maxFrames
+            ? allFrames
+            : Array.from({ length: maxFrames }, (_, i) => allFrames[Math.floor(i * allFrames.length / maxFrames)]);
+
+        if (framesToSend.length > 0) {
+            updateAvatarStatus(`Analyzing presentation + ${framesToSend.length} visual frames...`);
         }
-        
-        const analysisData = await analyzeResponse.json();
-        console.log('Analysis complete:', analysisData);
-        
-        // Display report
-        displayReport(analysisData.report);
-        
-        // Have avatar deliver coaching feedback
-        updateAvatarStatus('Delivering coaching...');
-        speakToAvatar(analysisData.coaching_script);
-        
-        // Wait for avatar to finish, then update status
-        setTimeout(() => {
-            updateAvatarStatus('Coaching complete');
-        }, 5000);
-        
+
+        const resp = await fetch(`/api/session/${sessionId}/analyze`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ transcript: fullTranscript, duration, frames: framesToSend }),
+        });
+        if (!resp.ok) throw new Error(`Analysis failed (${resp.status})`);
+
+        const { report } = await resp.json();
+        displayReport(report, framesToSend.length > 0);
         resetUI();
-        
+        updateAvatarStatus("✅ Coaching report ready — review below");
+
+        // Hide processing indicator immediately — emotional analysis is now
+        // included synchronously in the GPT-4o report (no Video Indexer polling needed).
+        const indicator = document.getElementById("processingIndicator");
+        if (indicator) indicator.classList.remove("visible");
+
     } catch (error) {
-        console.error('Error analyzing presentation:', error);
-        showError('Failed to analyze presentation: ' + error.message);
+        console.error("Analysis error:", error);
+        showError("Failed to analyze presentation: " + error.message);
         resetUI();
-        updateAvatarStatus('Ready');
+        updateAvatarStatus("Error during analysis");
+        const indicator = document.getElementById("processingIndicator");
+        if (indicator) indicator.classList.remove("visible");
     }
 }
 
+/** Stop audio + video capture without changing UI status — used internally. */
+function stopRecordingInternal() {
+    const wasRecording = isRecording;
+    isRecording = false;
+    stopAudioCapture();
+    stopVideoCapture();
+    stopFrameCapture();
+
+    if (wasRecording) {
+        const notice = document.getElementById("cameraNotice");
+        if (notice) {
+            notice.classList.remove("recording");
+            notice.querySelector("strong").textContent = "⚠️ Camera & Emotion Analysis Active";
+            notice.querySelector("small").textContent =
+                "Your webcam will activate when you start recording to capture facial expressions for emotion analysis. All video is processed securely and automatically deleted after analysis for your privacy.";
+        }
+    }
+}
+
+
 // ============================================================================
-// UI UPDATE FUNCTIONS
+// TRANSCRIPT DISPLAY
 // ============================================================================
 
 function createUserBubble(text) {
-    const box = document.getElementById('transcriptBox');
-    box.classList.remove('empty');
-    
-    const userMsg = document.createElement('div');
-    userMsg.style.cssText = 'margin: 10px 0; padding: 10px; background: #e3f2fd; border-left: 3px solid #2196F3; border-radius: 4px;';
-    userMsg.innerHTML = `<strong style="color: #2196F3;">You:</strong> ${text}`;
-    box.appendChild(userMsg);
+    const box = document.getElementById("transcriptBox");
+    const placeholder = box.querySelector(".transcript-placeholder");
+    if (placeholder) placeholder.remove();
+    box.classList.remove("empty");
+
+    const div = document.createElement("div");
+    div.style.cssText = "margin:10px 0;padding:10px;background:#e3f2fd;border-left:3px solid #2196F3;border-radius:4px;";
+
+    // Build the bubble content safely so transcript text is treated as plain text.
+    const strong = document.createElement("strong");
+    strong.style.color = "#2196F3";
+    strong.textContent = "You:";
+    div.appendChild(strong);
+    div.appendChild(document.createTextNode(" " + String(text)));
+
+    box.appendChild(div);
     box.scrollTop = box.scrollHeight;
 }
 
-function updateTranscriptDisplay(text, speaker = 'You') {
-    const box = document.getElementById('transcriptBox');
-    
-    if (!text || !text.trim()) {
-        box.innerHTML = '<span style="opacity: 0.5;">Your presentation transcript will appear here as you speak...</span>';
-        box.classList.add('empty');
-        return;
+function updateAvatarStreamingText(delta) {
+    const box = document.getElementById("transcriptBox");
+    if (!avatarStreamingBubble) {
+        avatarStreamingBubble = document.createElement("div");
+        avatarStreamingBubble.style.cssText =
+            "margin:10px 0;padding:10px;background:#e8f5e9;border-left:3px solid #4CAF50;border-radius:4px;opacity:0.85;";
+        avatarStreamingBubble.innerHTML =
+            `<strong style="color:#4CAF50;">🤖 Coach:</strong> <span class="avatar-text"></span>`;
+        box.appendChild(avatarStreamingBubble);
     }
-    
-    box.classList.remove('empty');
-    
-    if (speaker === 'Avatar') {
-        // Create avatar message element
-        const avatarMsg = document.createElement('div');
-        avatarMsg.style.cssText = 'margin: 10px 0; padding: 10px; background: #e8f5e9; border-left: 3px solid #4CAF50; border-radius: 4px;';
-        avatarMsg.innerHTML = `<strong style="color: #4CAF50;">🤖 Avatar:</strong> ${text}`;
-        box.appendChild(avatarMsg);
-        box.scrollTop = box.scrollHeight;
+    avatarStreamingBubble.querySelector(".avatar-text").textContent += delta;
+    box.scrollTop = box.scrollHeight;
+}
+
+function finalizeAvatarMessage(fullText) {
+    const box = document.getElementById("transcriptBox");
+    if (avatarStreamingBubble) {
+        // Overwrite with the authoritative final text from response.content_part.done —
+        // the streaming deltas may have been incomplete or arrived out of order.
+        avatarStreamingBubble.querySelector(".avatar-text").textContent = fullText;
+        avatarStreamingBubble.style.opacity = "1";
+        avatarStreamingBubble = null;
     } else {
-        // Update live preview bubble (interim text)
-        const existingUser = box.querySelector('[data-speaker="user-live"]');
-        if (existingUser) {
-            existingUser.remove();
-        }
-        if (text.trim()) {
-            const userMsg = document.createElement('div');
-            userMsg.setAttribute('data-speaker', 'user-live');
-            userMsg.style.cssText = 'margin: 10px 0; padding: 10px; background: #e3f2fd; border-left: 3px solid #2196F3; border-radius: 4px; opacity: 0.7;';
-            userMsg.innerHTML = `<strong style="color: #2196F3;">You:</strong> ${text}`;
-            box.appendChild(userMsg);
-            box.scrollTop = box.scrollHeight;
-        }
+        // No streaming bubble exists (e.g. no deltas arrived) — create the bubble now.
+        const div = document.createElement("div");
+        div.style.cssText =
+            "margin:10px 0;padding:10px;background:#e8f5e9;border-left:3px solid #4CAF50;border-radius:4px;";
+        div.innerHTML = `<strong style="color:#4CAF50;">🤖 Coach:</strong> <span class="avatar-text"></span>`;
+        div.querySelector(".avatar-text").textContent = fullText;
+        box.appendChild(div);
+        box.scrollTop = box.scrollHeight;
     }
+}
+
+function updateAvatarStatus(status) {
+    const el = document.getElementById("avatarStatus");
+    if (el) el.textContent = status;
 }
 
 function updateStatus(status) {
-    const badge = document.getElementById('statusBadge');
-    badge.className = 'status-badge';
-    
-    switch(status) {
-        case 'recording':
-            badge.classList.add('status-recording');
-            badge.textContent = '🔴 Recording';
-            break;
-        case 'analyzing':
-            badge.classList.add('status-analyzing');
-            badge.textContent = '🔄 Analyzing';
-            break;
-        default:
-            badge.classList.add('status-idle');
-            badge.textContent = 'Ready';
+    const badge = document.getElementById("statusBadge");
+    badge.className = "status-badge";
+    switch (status) {
+        case "recording": badge.classList.add("status-recording"); badge.textContent = "🔴 Recording"; break;
+        case "analyzing": badge.classList.add("status-analyzing"); badge.textContent = "🔄 Analyzing"; break;
+        default:          badge.classList.add("status-idle");      badge.textContent = "Ready";
     }
-}
-
-function displayReport(report) {
-    // Show report container
-    document.getElementById('reportContainer').classList.add('visible');
-    
-    // Overall score
-    document.getElementById('overallScore').textContent = report.overall_score.toFixed(1) + '/10';
-    
-    const levelElement = document.getElementById('performanceLevel');
-    levelElement.textContent = report.performance_level.replace('_', ' ');
-    levelElement.className = 'performance-level level-' + report.performance_level;
-    
-    // Criteria scores
-    const criteriaGrid = document.getElementById('criteriaGrid');
-    criteriaGrid.innerHTML = '';
-    
-    for (const [key, value] of Object.entries(report.criteria_scores)) {
-        const div = document.createElement('div');
-        div.className = 'criterion';
-        div.innerHTML = `
-            <div class="criterion-name">${key.replace(/_/g, ' ')}</div>
-            <div class="criterion-score">${value.toFixed(1)}/10</div>
-        `;
-        criteriaGrid.appendChild(div);
-    }
-    
-    // Strengths
-    const strengthsList = document.getElementById('strengthsList');
-    strengthsList.innerHTML = '';
-    report.strengths.forEach(strength => {
-        const div = document.createElement('div');
-        div.className = 'list-item';
-        div.textContent = strength;
-        strengthsList.appendChild(div);
-    });
-    
-    // Improvements
-    const improvementsList = document.getElementById('improvementsList');
-    improvementsList.innerHTML = '';
-    report.improvements.forEach(item => {
-        const div = document.createElement('div');
-        div.className = 'list-item improvement-item';
-        div.innerHTML = `
-            <div class="item-title">${item.area}</div>
-            <div class="item-detail"><strong>Current:</strong> ${item.current_state}</div>
-            <div class="item-detail"><strong>Recommendation:</strong> ${item.recommendation}</div>
-            ${item.example ? `<div class="item-example">"${item.example}"</div>` : ''}
-        `;
-        improvementsList.appendChild(div);
-    });
-    
-    // Rule violations
-    if (report.rule_violations && report.rule_violations.length > 0) {
-        document.getElementById('violationsSection').style.display = 'block';
-        const violationsList = document.getElementById('violationsList');
-        violationsList.innerHTML = '';
-        
-        report.rule_violations.forEach(violation => {
-            const div = document.createElement('div');
-            div.className = 'list-item violation-item';
-            div.innerHTML = `
-                <div class="item-title">${violation.rule_name} (${violation.severity})</div>
-                <div class="item-detail">${violation.description}</div>
-                <div class="item-detail"><strong>Suggestion:</strong> ${violation.suggestion}</div>
-                ${violation.example ? `<div class="item-example">"${violation.example}"</div>` : ''}
-            `;
-            violationsList.appendChild(div);
-        });
-    } else {
-        document.getElementById('violationsSection').style.display = 'none';
-    }
-    
-    // Summary
-    document.getElementById('summaryText').textContent = report.summary;
-    
-    // Next steps
-    const nextStepsList = document.getElementById('nextStepsList');
-    nextStepsList.innerHTML = '';
-    report.next_steps.forEach(step => {
-        const div = document.createElement('div');
-        div.className = 'list-item';
-        div.textContent = step;
-        nextStepsList.appendChild(div);
-    });
-    
-    // Scroll to report
-    document.getElementById('reportContainer').scrollIntoView({ behavior: 'smooth' });
-}
-
-function showError(message) {
-    const errorDiv = document.getElementById('errorMessage');
-    errorDiv.textContent = message;
-    errorDiv.classList.add('visible');
-    
-    setTimeout(() => {
-        errorDiv.classList.remove('visible');
-    }, 5000);
 }
 
 function resetUI() {
-    updateStatus('idle');
-    document.getElementById('startBtn').disabled = false;
-    document.getElementById('stopBtn').disabled = true;
+    updateStatus("idle");
+    document.getElementById("startBtn").disabled = false;
+    document.getElementById("stopBtn").disabled = true;
 }
+
+
+// ============================================================================
+// COACHING REPORT DISPLAY
+// ============================================================================
+
+function displayReport(report, isEnhanced = false) {
+    document.getElementById("reportContainer").classList.add("visible");
+    if (isEnhanced) showNotification("✨ Report enhanced with facial emotion analysis!", "success");
+
+    document.getElementById("overallScore").textContent = report.overall_score.toFixed(1) + "/10";
+
+    const levelEl = document.getElementById("performanceLevel");
+    levelEl.textContent = report.performance_level.replace("_", " ");
+    levelEl.className = "performance-level level-" + report.performance_level;
+
+    const grid = document.getElementById("criteriaGrid");
+    grid.innerHTML = "";
+    for (const [key, value] of Object.entries(report.criteria_scores)) {
+        const div = document.createElement("div");
+        div.className = "criterion";
+
+        const nameDiv = document.createElement("div");
+        nameDiv.className = "criterion-name";
+        nameDiv.textContent = key.replace(/_/g, " ");
+        div.appendChild(nameDiv);
+
+        const scoreDiv = document.createElement("div");
+        scoreDiv.className = "criterion-score";
+        scoreDiv.textContent = value.toFixed(1) + "/10";
+        div.appendChild(scoreDiv);
+
+        grid.appendChild(div);
+    }
+
+    const renderList = (id, items, renderItem) => {
+        const el = document.getElementById(id);
+        el.innerHTML = "";
+        items.forEach(item => {
+            const container = document.createElement("div");
+            renderItem(container, item);
+            el.appendChild(container);
+        });
+    };
+
+    renderList("strengthsList", report.strengths, (container, s) => {
+        container.classList.add("list-item");
+        container.textContent = s;
+    });
+
+    renderList("improvementsList", report.improvements, (container, item) => {
+        container.classList.add("list-item", "improvement-item");
+
+        const titleDiv = document.createElement("div");
+        titleDiv.className = "item-title";
+        titleDiv.textContent = item.area;
+        container.appendChild(titleDiv);
+
+        const currentDiv = document.createElement("div");
+        currentDiv.className = "item-detail";
+        const currentLabel = document.createElement("strong");
+        currentLabel.textContent = "Current:";
+        currentDiv.appendChild(currentLabel);
+        currentDiv.appendChild(document.createTextNode(" " + item.current_state));
+        container.appendChild(currentDiv);
+
+        const recommendationDiv = document.createElement("div");
+        recommendationDiv.className = "item-detail";
+        const recommendationLabel = document.createElement("strong");
+        recommendationLabel.textContent = "Recommendation:";
+        recommendationDiv.appendChild(recommendationLabel);
+        recommendationDiv.appendChild(document.createTextNode(" " + item.recommendation));
+        container.appendChild(recommendationDiv);
+
+        if (item.example) {
+            const exampleDiv = document.createElement("div");
+            exampleDiv.className = "item-example";
+            exampleDiv.textContent = `"${item.example}"`;
+            container.appendChild(exampleDiv);
+        }
+    });
+
+    if (report.rule_violations?.length > 0) {
+        document.getElementById("violationsSection").style.display = "block";
+        renderList("violationsList", report.rule_violations, (container, v) => {
+            container.classList.add("list-item", "violation-item");
+
+            const titleDiv = document.createElement("div");
+            titleDiv.className = "item-title";
+            titleDiv.textContent = `${v.rule_name} (${v.severity})`;
+            container.appendChild(titleDiv);
+
+            const descriptionDiv = document.createElement("div");
+            descriptionDiv.className = "item-detail";
+            descriptionDiv.textContent = v.description;
+            container.appendChild(descriptionDiv);
+
+            const suggestionDiv = document.createElement("div");
+            suggestionDiv.className = "item-detail";
+            const suggestionLabel = document.createElement("strong");
+            suggestionLabel.textContent = "Suggestion:";
+            suggestionDiv.appendChild(suggestionLabel);
+            suggestionDiv.appendChild(document.createTextNode(" " + v.suggestion));
+            container.appendChild(suggestionDiv);
+
+            if (v.example) {
+                const exampleDiv = document.createElement("div");
+                exampleDiv.className = "item-example";
+                exampleDiv.textContent = `"${v.example}"`;
+                container.appendChild(exampleDiv);
+            }
+        });
+    } else {
+        document.getElementById("violationsSection").style.display = "none";
+    }
+
+    document.getElementById("summaryText").textContent = report.summary;
+
+    // Emotional tone section
+    const et = report.emotional_tone;
+    if (et) {
+        document.getElementById("emotionalToneSection").style.display = "block";
+        const sentimentEmoji = { positive: "😊", neutral: "😐", negative: "😟", mixed: "🎭" }[et.overall_sentiment] ?? "🎭";
+        document.getElementById("emotionalToneSummary").innerHTML =
+            `${sentimentEmoji} <strong>${et.overall_sentiment.charAt(0).toUpperCase() + et.overall_sentiment.slice(1)} sentiment</strong>
+             &nbsp;·&nbsp; Confidence: <strong>${et.confidence_level}</strong>
+             &nbsp;·&nbsp; Energy: <strong>${et.energy_level}</strong>`;
+        const momentsEl = document.getElementById("emotionalKeyMoments");
+        momentsEl.innerHTML = "";
+        (et.key_moments || []).forEach(m => {
+            const d = document.createElement("div");
+            d.className = "list-item";
+            d.textContent = m;
+            momentsEl.appendChild(d);
+        });
+        if (et.authenticity_note) {
+            document.getElementById("emotionalAuthenticity").textContent = et.authenticity_note;
+        }
+    } else {
+        document.getElementById("emotionalToneSection").style.display = "none";
+    }
+
+    // Visual analysis section
+    const va = report.visual_analysis;
+    const vaSection = document.getElementById("visualAnalysisSection");
+    if (va && vaSection) {
+        vaSection.style.display = "block";
+        const rows = [
+            ["😊 Expressions",        va.expressions],
+            ["👁️ Eye Contact",         va.eye_contact],
+            ["🧍 Posture & Gestures",  va.posture_and_gestures],
+            ["👔 Appearance",          va.professional_appearance],
+            ["📈 Confidence Arc",      va.confidence_arc],
+        ];
+        document.getElementById("visualAnalysisRows").innerHTML = rows.map(([label, value]) =>
+            `<div class="list-item"><strong>${label}:</strong> ${value}</div>`
+        ).join("");
+        document.getElementById("visualOverallNote").textContent = va.overall_note;
+    } else if (vaSection) {
+        vaSection.style.display = "none";
+    }
+
+    renderList("nextStepsList", report.next_steps, step => `<div class="list-item">${step}</div>`);
+
+    document.getElementById("reportContainer").scrollIntoView({ behavior: "smooth" });
+}
+
+
+// ============================================================================
+// VIDEO CAPTURE  (camera preview only — not uploaded anywhere)
+// ============================================================================
+
+async function startVideoCapture() {
+    try {
+        userVideoStream = await navigator.mediaDevices.getUserMedia({
+            video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" },
+            audio: false,
+        });
+
+        // For preview-only usage, we do not need to record or buffer video data.
+        // Just mark that video capture is active; other code can use `userVideoStream`
+        // directly (e.g., attach it to a <video> element or draw to a <canvas>.
+        isRecordingVideo = true;
+        console.log("Video capture (preview) started.");
+        return true;
+    } catch (error) {
+        console.error("Video capture error:", error);
+        showError("Could not access webcam: " + error.message);
+        return false;
+    }
+}
+
+function stopVideoCapture() {
+    // Stop the preview stream and clear state.
+    if (userVideoStream) {
+        userVideoStream.getTracks().forEach(t => t.stop());
+        userVideoStream = null;
+    }
+    isRecordingVideo = false;
+}
+
+async function processRecordedVideo() {
+    // Raw MediaRecorder chunks are discarded — frames were captured separately via canvas.
+    recordedChunks = [];
+    console.log("Video capture discarded (not uploaded to Azure).");
+}
+
+
+// ============================================================================
+// FRAME CAPTURE  (webcam snapshots for visual/emotion analysis)
+// ============================================================================
+
+function startFrameCapture() {
+    if (!userVideoStream) return;
+
+    // Create an off-screen video element to draw from
+    cameraPreviewVideo = document.createElement("video");
+    cameraPreviewVideo.srcObject = userVideoStream;
+    cameraPreviewVideo.muted = true;
+    cameraPreviewVideo.playsInline = true;
+    cameraPreviewVideo.play().catch(() => {});
+
+    capturedFrames = [];
+
+    // Interval and max count come from server config so they're tuneable via .env
+    const intervalMs = voiceLiveConfig?.frame_interval_ms ?? 30000;
+
+    // Capture first frame after a 1.5s warm-up, then at the configured interval
+    setTimeout(captureFrame, 1500);
+    frameIntervalId = setInterval(captureFrame, intervalMs);
+    console.log(`[Visual] Frame capture started (every ${intervalMs / 1000}s)`);
+}
+
+function captureFrame() {
+    if (!cameraPreviewVideo || !userVideoStream || cameraPreviewVideo.readyState < 2) return;
+    const w = 640;
+    const h = cameraPreviewVideo.videoHeight
+        ? Math.round(w * cameraPreviewVideo.videoHeight / cameraPreviewVideo.videoWidth)
+        : 360;
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    canvas.getContext("2d").drawImage(cameraPreviewVideo, 0, 0, w, h);
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.65);
+    capturedFrames.push(dataUrl);
+    console.log(`[Visual] Frame ${capturedFrames.length} captured (~${Math.round(dataUrl.length / 1024)}KB)`);
+}
+
+function stopFrameCapture() {
+    if (frameIntervalId) { clearInterval(frameIntervalId); frameIntervalId = null; }
+    if (cameraPreviewVideo) { cameraPreviewVideo.srcObject = null; cameraPreviewVideo = null; }
+    console.log(`[Visual] Frame capture stopped. ${capturedFrames.length} frames ready for analysis.`);
+}
+
+
+// ============================================================================
+// NOTIFICATIONS
+// ============================================================================
+
+function showError(message) {
+    const el = document.getElementById("errorMessage");
+    el.textContent = message;
+    el.style.background = "";
+    el.classList.add("visible");
+    setTimeout(() => el.classList.remove("visible"), 5000);
+}
+
+function showNotification(message, type = "info") {
+    const el = document.getElementById("errorMessage");
+    el.textContent = message;
+    el.style.background = type === "success" ? "#4CAF50" : type === "info" ? "#2196F3" : "#f44336";
+    el.classList.add("visible");
+    setTimeout(() => { el.classList.remove("visible"); el.style.background = ""; }, 5000);
+}
+
 
 // ============================================================================
 // INITIALIZATION
 // ============================================================================
 
-document.addEventListener('DOMContentLoaded', function() {
-    console.log('AI Sales Coach initialized');
-    
-    // Check browser compatibility
-    if (!recognition) {
-        showError('Speech recognition not supported. Please use Chrome or Edge browser.');
-    }
-    
-    // Check if Speech SDK is loaded
-    if (typeof SpeechSDK === 'undefined') {
-        showError('Azure Speech SDK not loaded. Please refresh the page.');
-    } else {
-        console.log('Azure Speech SDK loaded successfully');
+document.addEventListener("DOMContentLoaded", () => {
+    console.log("AI Sales Coach (Voice Live) initialised");
+
+    const missing = [];
+    if (!window.WebSocket)                       missing.push("WebSocket");
+    if (!window.AudioWorklet || !window.AudioContext) missing.push("AudioWorklet");
+    if (!window.RTCPeerConnection)               missing.push("WebRTC");
+    if (!navigator.mediaDevices?.getUserMedia)   missing.push("getUserMedia");
+
+    if (missing.length > 0) {
+        showError(`Browser missing required APIs: ${missing.join(", ")}. Please use Chrome 80+ or Edge 80+.`);
     }
 });
