@@ -85,7 +85,7 @@ async function connectAvatar() {
         // 3. Open a direct WebSocket to Voice Live.
         //    The API key is in the query string — encrypted over wss.
         console.log("[VoiceLive] Connecting to:", voiceLiveConfig.ws_url);
-        const wsUrl = `${voiceLiveConfig.ws_url}&api-key=${voiceLiveConfig.api_key}`;
+        const wsUrl = `${voiceLiveConfig.ws_url}&api-key=${encodeURIComponent(voiceLiveConfig.api_key)}`;
         voiceLiveWs = new WebSocket(wsUrl);
         voiceLiveWs.onmessage = handleVoiceLiveMessage;
         voiceLiveWs.onerror   = (evt) => {
