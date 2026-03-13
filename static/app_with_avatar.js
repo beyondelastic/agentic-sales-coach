@@ -775,38 +775,97 @@ function displayReport(report, isEnhanced = false) {
     for (const [key, value] of Object.entries(report.criteria_scores)) {
         const div = document.createElement("div");
         div.className = "criterion";
-        div.innerHTML = `<div class="criterion-name">${key.replace(/_/g, " ")}</div>
-                         <div class="criterion-score">${value.toFixed(1)}/10</div>`;
+
+        const nameDiv = document.createElement("div");
+        nameDiv.className = "criterion-name";
+        nameDiv.textContent = key.replace(/_/g, " ");
+        div.appendChild(nameDiv);
+
+        const scoreDiv = document.createElement("div");
+        scoreDiv.className = "criterion-score";
+        scoreDiv.textContent = value.toFixed(1) + "/10";
+        div.appendChild(scoreDiv);
+
         grid.appendChild(div);
     }
 
-    const renderList = (id, items, render) => {
+    const renderList = (id, items, renderItem) => {
         const el = document.getElementById(id);
         el.innerHTML = "";
-        items.forEach(item => { const d = document.createElement("div"); d.innerHTML = render(item); el.appendChild(d); });
+        items.forEach(item => {
+            const container = document.createElement("div");
+            renderItem(container, item);
+            el.appendChild(container);
+        });
     };
 
-    renderList("strengthsList", report.strengths, s => {
-        return `<div class="list-item">${s}</div>`;
+    renderList("strengthsList", report.strengths, (container, s) => {
+        container.classList.add("list-item");
+        container.textContent = s;
     });
 
-    renderList("improvementsList", report.improvements, item => `
-        <div class="list-item improvement-item">
-            <div class="item-title">${item.area}</div>
-            <div class="item-detail"><strong>Current:</strong> ${item.current_state}</div>
-            <div class="item-detail"><strong>Recommendation:</strong> ${item.recommendation}</div>
-            ${item.example ? `<div class="item-example">"${item.example}"</div>` : ""}
-        </div>`);
+    renderList("improvementsList", report.improvements, (container, item) => {
+        container.classList.add("list-item", "improvement-item");
+
+        const titleDiv = document.createElement("div");
+        titleDiv.className = "item-title";
+        titleDiv.textContent = item.area;
+        container.appendChild(titleDiv);
+
+        const currentDiv = document.createElement("div");
+        currentDiv.className = "item-detail";
+        const currentLabel = document.createElement("strong");
+        currentLabel.textContent = "Current:";
+        currentDiv.appendChild(currentLabel);
+        currentDiv.appendChild(document.createTextNode(" " + item.current_state));
+        container.appendChild(currentDiv);
+
+        const recommendationDiv = document.createElement("div");
+        recommendationDiv.className = "item-detail";
+        const recommendationLabel = document.createElement("strong");
+        recommendationLabel.textContent = "Recommendation:";
+        recommendationDiv.appendChild(recommendationLabel);
+        recommendationDiv.appendChild(document.createTextNode(" " + item.recommendation));
+        container.appendChild(recommendationDiv);
+
+        if (item.example) {
+            const exampleDiv = document.createElement("div");
+            exampleDiv.className = "item-example";
+            exampleDiv.textContent = `"${item.example}"`;
+            container.appendChild(exampleDiv);
+        }
+    });
 
     if (report.rule_violations?.length > 0) {
         document.getElementById("violationsSection").style.display = "block";
-        renderList("violationsList", report.rule_violations, v => `
-            <div class="list-item violation-item">
-                <div class="item-title">${v.rule_name} (${v.severity})</div>
-                <div class="item-detail">${v.description}</div>
-                <div class="item-detail"><strong>Suggestion:</strong> ${v.suggestion}</div>
-                ${v.example ? `<div class="item-example">"${v.example}"</div>` : ""}
-            </div>`);
+        renderList("violationsList", report.rule_violations, (container, v) => {
+            container.classList.add("list-item", "violation-item");
+
+            const titleDiv = document.createElement("div");
+            titleDiv.className = "item-title";
+            titleDiv.textContent = `${v.rule_name} (${v.severity})`;
+            container.appendChild(titleDiv);
+
+            const descriptionDiv = document.createElement("div");
+            descriptionDiv.className = "item-detail";
+            descriptionDiv.textContent = v.description;
+            container.appendChild(descriptionDiv);
+
+            const suggestionDiv = document.createElement("div");
+            suggestionDiv.className = "item-detail";
+            const suggestionLabel = document.createElement("strong");
+            suggestionLabel.textContent = "Suggestion:";
+            suggestionDiv.appendChild(suggestionLabel);
+            suggestionDiv.appendChild(document.createTextNode(" " + v.suggestion));
+            container.appendChild(suggestionDiv);
+
+            if (v.example) {
+                const exampleDiv = document.createElement("div");
+                exampleDiv.className = "item-example";
+                exampleDiv.textContent = `"${v.example}"`;
+                container.appendChild(exampleDiv);
+            }
+        });
     } else {
         document.getElementById("violationsSection").style.display = "none";
     }
