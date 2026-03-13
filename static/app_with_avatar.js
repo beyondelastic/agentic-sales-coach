@@ -688,7 +688,14 @@ function createUserBubble(text) {
 
     const div = document.createElement("div");
     div.style.cssText = "margin:10px 0;padding:10px;background:#e3f2fd;border-left:3px solid #2196F3;border-radius:4px;";
-    div.innerHTML = `<strong style="color:#2196F3;">You:</strong> ${text}`;
+
+    // Build the bubble content safely so transcript text is treated as plain text.
+    const strong = document.createElement("strong");
+    strong.style.color = "#2196F3";
+    strong.textContent = "You:";
+    div.appendChild(strong);
+    div.appendChild(document.createTextNode(" " + String(text)));
+
     box.appendChild(div);
     box.scrollTop = box.scrollHeight;
 }
