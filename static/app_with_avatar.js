@@ -643,18 +643,20 @@ async function stopRecording() {
 
 /** Stop audio + video capture without changing UI status — used internally. */
 function stopRecordingInternal() {
-    if (!isRecording) return;
+    const wasRecording = isRecording;
     isRecording = false;
     stopAudioCapture();
     stopVideoCapture();
     stopFrameCapture();
 
-    const notice = document.getElementById("cameraNotice");
-    if (notice) {
-        notice.classList.remove("recording");
-        notice.querySelector("strong").textContent = "⚠️ Camera & Emotion Analysis Active";
-        notice.querySelector("small").textContent =
-            "Your webcam will activate when you start recording to capture facial expressions for emotion analysis. All video is processed securely and automatically deleted after analysis for your privacy.";
+    if (wasRecording) {
+        const notice = document.getElementById("cameraNotice");
+        if (notice) {
+            notice.classList.remove("recording");
+            notice.querySelector("strong").textContent = "⚠️ Camera & Emotion Analysis Active";
+            notice.querySelector("small").textContent =
+                "Your webcam will activate when you start recording to capture facial expressions for emotion analysis. All video is processed securely and automatically deleted after analysis for your privacy.";
+        }
     }
 }
 
