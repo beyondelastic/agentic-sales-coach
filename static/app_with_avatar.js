@@ -858,19 +858,11 @@ async function startVideoCapture() {
             audio: false,
         });
 
-        let options = { videoBitsPerSecond: 1000000 };
-        if      (MediaRecorder.isTypeSupported("video/webm;codecs=h264")) options.mimeType = "video/webm;codecs=h264";
-        else if (MediaRecorder.isTypeSupported("video/webm;codecs=vp9"))  options.mimeType = "video/webm;codecs=vp9";
-        else if (MediaRecorder.isTypeSupported("video/webm"))             options.mimeType = "video/webm";
-
-        mediaRecorder = new MediaRecorder(userVideoStream, options);
-        recordedChunks = [];
-        mediaRecorder.ondataavailable = (e) => { if (e.data?.size > 0) recordedChunks.push(e.data); };
-        mediaRecorder.onerror = (e) => console.error("MediaRecorder error:", e.error);
-        mediaRecorder.onstop = async () => { console.log("Video capture stopped."); await processRecordedVideo(); };
-        mediaRecorder.start(100);
+        // For preview-only usage, we do not need to record or buffer video data.
+        // Just mark that video capture is active; other code can use `userVideoStream`
+        // directly (e.g., attach it to a <video> element or draw to a <canvas>.
         isRecordingVideo = true;
-        console.log("Video capture started:", mediaRecorder.mimeType);
+        console.log("Video capture (preview) started.");
         return true;
     } catch (error) {
         console.error("Video capture error:", error);
@@ -880,8 +872,12 @@ async function startVideoCapture() {
 }
 
 function stopVideoCapture() {
-    if (mediaRecorder && isRecordingVideo) { mediaRecorder.stop(); isRecordingVideo = false; }
-    if (userVideoStream) { userVideoStream.getTracks().forEach(t => t.stop()); userVideoStream = null; }
+    // Stop the preview stream and clear state.
+    if (userVideoStream) {
+        userVideoStream.getTracks().forEach(t => t.stop());
+        userVideoStream = null;
+    }
+    isRecordingVideo = false;
 }
 
 async function processRecordedVideo() {
