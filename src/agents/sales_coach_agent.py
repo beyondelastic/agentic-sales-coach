@@ -264,8 +264,9 @@ engagement: 0.10
         logger.info(f"Analyzing presentation transcript ({len(transcript)} characters)")
         
         try:
-            # Call GPT-4.1 for transcript analysis
-            response = self.client.chat.completions.create(
+            # Call GPT-4.1 for transcript analysis in a worker thread to avoid blocking the event loop
+            response = await asyncio.to_thread(
+                self.client.chat.completions.create,
                 model=self.model,
                 messages=[
                     {"role": "system", "content": self.system_prompt},
@@ -273,7 +274,7 @@ engagement: 0.10
                 ],
                 response_format={"type": "json_object"},
                 temperature=0.2,
-                max_completion_tokens=3000
+                max_completion_tokens=3000,
             )
             
             # Parse JSON response
