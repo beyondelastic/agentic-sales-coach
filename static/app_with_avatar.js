@@ -916,7 +916,10 @@ function displayReport(report, isEnhanced = false) {
         vaSection.style.display = "none";
     }
 
-    renderList("nextStepsList", report.next_steps, step => `<div class="list-item">${step}</div>`);
+    renderList("nextStepsList", report.next_steps, (container, step) => {
+        container.classList.add("list-item");
+        container.textContent = step;
+    });
 
     document.getElementById("reportContainer").scrollIntoView({ behavior: "smooth" });
 }
